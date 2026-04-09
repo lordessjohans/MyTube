@@ -1,0 +1,8 @@
+{
+  "name": "MyTube",
+  "description": "Uses computer vision to recognize objects and makes music based on what it sees. Now includes live audio transcription and team communication.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

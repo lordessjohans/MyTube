@@ -1,0 +1,102 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "A user's profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "avatarStyle": { "type": "string" },
+        "avatarAnimation": { "type": "string" },
+        "avatarBorder": { "type": "string" },
+        "avatarColor": { "type": "string" }
+      },
+      "required": ["uid", "displayName", "email", "role"]
+    },
+    "Invitation": {
+      "title": "Invitation",
+      "description": "A meeting invitation",
+      "type": "object",
+      "properties": {
+        "meetingId": { "type": "string" },
+        "meetingName": { "type": "string" },
+        "hostId": { "type": "string" },
+        "hostName": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "declined"] },
+        "createdAt": { "type": "timestamp" }
+      },
+      "required": ["meetingId", "meetingName", "hostId", "hostName", "status", "createdAt"]
+    },
+    "Meeting": {
+      "title": "Meeting",
+      "description": "A group meeting or private stream",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "hostId": { "type": "string" },
+        "isPrivate": { "type": "boolean" },
+        "participants": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "createdAt": { "type": "timestamp" }
+      },
+      "required": ["name", "hostId", "isPrivate", "participants", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message within a meeting",
+      "type": "object",
+      "properties": {
+        "meetingId": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "text": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "required": ["meetingId", "senderId", "senderName", "text", "createdAt"]
+    },
+    "SiteFeedItem": {
+      "title": "SiteFeedItem",
+      "description": "An item in the site-wide feed",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhoto": { "type": "string" },
+        "description": { "type": "string" },
+        "snapshot": { "type": "string" },
+        "isLive": { "type": "boolean" },
+        "meetingId": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      },
+      "required": ["userName", "description", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profiles"
+    },
+    "/users/{userId}/invitations/{invitationId}": {
+      "schema": { "$ref": "#/entities/Invitation" },
+      "description": "Meeting invitations for a user"
+    },
+    "/meetings/{meetingId}": {
+      "schema": { "$ref": "#/entities/Meeting" },
+      "description": "Meetings and streams"
+    },
+    "/meetings/{meetingId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Messages within a meeting"
+    },
+    "/site_feed/{itemId}": {
+      "schema": { "$ref": "#/entities/SiteFeedItem" },
+      "description": "Site-wide feed items"
+    }
+  }
+}
