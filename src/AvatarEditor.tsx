@@ -39,6 +39,23 @@ const AVATAR_ANIMATIONS = [
   { id: 'float', name: 'Float', class: 'animate-[float_4s_ease-in-out_infinite]' }
 ];
 
+const AVATAR_FRAMES = [
+  { id: 'none', name: 'None', class: '' },
+  { id: 'punk', name: 'Punk', class: 'ring-4 ring-red-600 ring-offset-4 ring-offset-black border-dashed border-4 border-white' },
+  { id: 'grunge', name: 'Grunge', class: 'grayscale contrast-150 sepia-[.3] border-8 border-zinc-800 shadow-[0_0_20px_rgba(0,0,0,0.8)]' },
+  { id: 'preppy', name: 'Preppy', class: 'ring-4 ring-pink-300 ring-offset-2 border-4 border-white shadow-lg' },
+  { id: 'rapper', name: 'Rapper', class: 'border-[12px] border-yellow-500 shadow-[0_0_30px_rgba(234,179,8,0.5)] brightness-110' },
+  { id: 'cheerleader', name: 'Cheer', class: 'ring-8 ring-blue-500 ring-inset border-4 border-red-500' }
+];
+
+const AVATAR_THEMES = [
+  { id: 'none', name: 'Default', class: '' },
+  { id: 'noir', name: 'Noir', class: 'grayscale contrast-125 brightness-90' },
+  { id: 'pop', name: 'Pop', class: 'saturate-200 hue-rotate-15 contrast-110' },
+  { id: 'vikings', name: 'Vikings', class: 'sepia-[.5] contrast-110 brightness-110 saturate-50' },
+  { id: 'punk-theme', name: 'Punk', class: 'invert contrast-150 hue-rotate-180' }
+];
+
 export function AvatarEditor({ user, onClose }: { user: any, onClose: () => void }) {
   const [mode, setMode] = useState<'view' | 'camera' | 'generate'>('view');
   const [photoURL, setPhotoURL] = useState(user.photoURL || '');
@@ -46,6 +63,8 @@ export function AvatarEditor({ user, onClose }: { user: any, onClose: () => void
   const [avatarAnimation, setAvatarAnimation] = useState(user.avatarAnimation || 'none');
   const [avatarBorder, setAvatarBorder] = useState(user.avatarBorder || 'thin');
   const [avatarColor, setAvatarColor] = useState(user.avatarColor || 'orange');
+  const [avatarFrame, setAvatarFrame] = useState(user.avatarFrame || 'none');
+  const [avatarTheme, setAvatarTheme] = useState(user.avatarTheme || 'none');
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -179,7 +198,9 @@ export function AvatarEditor({ user, onClose }: { user: any, onClose: () => void
         avatarStyle,
         avatarAnimation,
         avatarBorder,
-        avatarColor
+        avatarColor,
+        avatarFrame,
+        avatarTheme
       });
       onClose();
     } catch (error) {
@@ -193,6 +214,8 @@ export function AvatarEditor({ user, onClose }: { user: any, onClose: () => void
   const animClass = AVATAR_ANIMATIONS.find(a => a.id === avatarAnimation)?.class || '';
   const borderClass = AVATAR_BORDERS.find(b => b.id === avatarBorder)?.class || '';
   const colorClass = AVATAR_COLORS.find(c => c.id === avatarColor)?.class || '';
+  const frameClass = AVATAR_FRAMES.find(f => f.id === avatarFrame)?.class || '';
+  const themeClass = AVATAR_THEMES.find(t => t.id === avatarTheme)?.class || '';
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
@@ -216,10 +239,10 @@ export function AvatarEditor({ user, onClose }: { user: any, onClose: () => void
               <img 
                 src={photoURL} 
                 alt="Avatar Preview" 
-                className={`w-full h-full object-cover transition-all duration-300 ${styleClass} ${animClass} ${borderClass} ${colorClass.split(' ')[0]}`}
+                className={`w-full h-full object-cover transition-all duration-300 ${styleClass} ${animClass} ${borderClass} ${colorClass.split(' ')[0]} ${frameClass} ${themeClass}`}
               />
             ) : (
-              <div className={`w-full h-full flex items-center justify-center transition-all duration-300 ${styleClass} ${animClass} ${borderClass} ${colorClass}`}>
+              <div className={`w-full h-full flex items-center justify-center transition-all duration-300 ${styleClass} ${animClass} ${borderClass} ${colorClass} ${frameClass} ${themeClass}`}>
                 <ImageIcon className="w-12 h-12 opacity-50" />
               </div>
             )}
@@ -358,6 +381,40 @@ export function AvatarEditor({ user, onClose }: { user: any, onClose: () => void
                       }`}
                     >
                       {a.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-white/50 uppercase tracking-widest mb-3">Frame Style</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {AVATAR_FRAMES.map(f => (
+                    <button
+                      key={f.id}
+                      onClick={() => setAvatarFrame(f.id)}
+                      className={`py-2 text-[10px] font-bold uppercase tracking-widest border transition-all ${
+                        avatarFrame === f.id ? 'bg-orange-500/20 border-orange-500 text-orange-400' : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                      }`}
+                    >
+                      {f.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-white/50 uppercase tracking-widest mb-3">Visual Theme</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {AVATAR_THEMES.map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => setAvatarTheme(t.id)}
+                      className={`py-2 text-[10px] font-bold uppercase tracking-widest border transition-all ${
+                        avatarTheme === t.id ? 'bg-orange-500/20 border-orange-500 text-orange-400' : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                      }`}
+                    >
+                      {t.name}
                     </button>
                   ))}
                 </div>

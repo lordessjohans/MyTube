@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { Camera, Square, Play, Music, Loader2, AlertCircle, Key, Activity, Cpu, ScanFace, Info, X, Mic, Settings, Video, VideoOff, Volume2, VolumeX, Users, Share2, RefreshCw, Upload } from 'lucide-react';
+import { Camera, Square, Play, Music, Loader2, AlertCircle, Key, Activity, Cpu, ScanFace, Info, X, Mic, Settings, Video, VideoOff, Volume2, VolumeX, Users, Share2, RefreshCw, Upload, SkipBack, SkipForward } from 'lucide-react';
+import * as faceapi from '@vladmandic/face-api';
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
@@ -11,6 +12,7 @@ import { auth, db } from './firebase';
 import { doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp } from 'firebase/firestore';
 import { AvatarEditor } from './AvatarEditor';
 import { NewsCard } from './components/NewsCard';
+import { IntelFeed } from './components/IntelFeed';
 
 let hoverSynth: Tone.Synth | null = null;
 
@@ -48,355 +50,6 @@ interface SmoothedBox {
   labelY: number;
 }
 
-class PCMPlayer {
-  audioContext: AudioContext;
-  nextStartTime: number;
-  pitch: number = 1.0;
-  muted: boolean = false;
-
-  constructor(sampleRate: number = 48000) {
-    this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate });
-    this.nextStartTime = this.audioContext.currentTime;
-  }
-
-  setPitch(pitch: number) {
-    this.pitch = pitch;
-  }
-
-  setMuted(muted: boolean) {
-    this.muted = muted;
-  }
-
-  playChunk(base64Data: string) {
-    if (this.muted) return;
-    const binaryString = atob(base64Data);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    
-    // 16-bit PCM stereo
-    const int16Array = new Int16Array(bytes.buffer);
-    const numSamples = int16Array.length / 2;
-    const leftChannel = new Float32Array(numSamples);
-    const rightChannel = new Float32Array(numSamples);
-    
-    for (let i = 0; i < numSamples; i++) {
-      leftChannel[i] = int16Array[i * 2] / 32768.0;
-      rightChannel[i] = int16Array[i * 2 + 1] / 32768.0;
-    }
-
-    const audioBuffer = this.audioContext.createBuffer(2, numSamples, this.audioContext.sampleRate);
-    audioBuffer.getChannelData(0).set(leftChannel);
-    audioBuffer.getChannelData(1).set(rightChannel);
-
-    const source = this.audioContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.playbackRate.value = this.pitch;
-    source.connect(this.audioContext.destination);
-
-    const currentTime = this.audioContext.currentTime;
-    if (this.nextStartTime < currentTime) {
-      this.nextStartTime = currentTime + 0.05;
-    }
-
-    source.start(this.nextStartTime);
-    // Adjust duration for playbackRate
-    this.nextStartTime += audioBuffer.duration / this.pitch;
-  }
-
-  stop() {
-    if (this.audioContext.state !== 'closed') {
-      this.audioContext.close();
-    }
-  }
-}
-
-class ProceduralMusicEngine {
-  audioContext: AudioContext;
-  isPlaying: boolean = false;
-  currentVibe: string = 'minimalist ambient drone, quiet';
-  targetVibe: string = 'minimalist ambient drone, quiet';
-  vibeBlend: number = 1.0;
-  nextNoteTime: number = 0;
-  timerID: number | null = null;
-  
-  // Scales (intervals from root)
-  scales: Record<string, number[]> = {
-    major: [0, 2, 4, 5, 7, 9, 11],
-    minor: [0, 2, 3, 5, 7, 8, 10],
-    pentatonic: [0, 2, 4, 7, 9],
-    cyberpunk: [0, 3, 7, 8, 10], // Phrygian dominant-ish
-    drone: [0, 7], // Just roots and fifths
-    melancholic: [0, 2, 3, 7, 8], // Minor pentatonic-ish
-    dissonant: [0, 1, 6, 7, 11], // For fear/disgust
-    tribal: [0, 3, 5, 7, 10] // Minor pentatonic
-  };
-
-  constructor() {
-    this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-  }
-
-  setVibe(vibe: string) {
-    if (this.targetVibe !== vibe) {
-      if (this.vibeBlend >= 1.0) {
-        this.currentVibe = this.targetVibe;
-      }
-      this.targetVibe = vibe;
-      this.vibeBlend = 0.0;
-    }
-  }
-
-  start() {
-    if (this.audioContext.state === 'suspended') {
-      this.audioContext.resume();
-    }
-    this.isPlaying = true;
-    this.nextNoteTime = this.audioContext.currentTime + 0.1;
-    this.scheduleNext();
-  }
-
-  stop() {
-    this.isPlaying = false;
-    if (this.timerID !== null) {
-      clearTimeout(this.timerID);
-      this.timerID = null;
-    }
-    if (this.audioContext.state !== 'closed') {
-      this.audioContext.close();
-    }
-  }
-
-  playNote(freq: number, type: OscillatorType, duration: number, vol: number, attack: number, time: number) {
-    if (this.audioContext.state === 'closed') return;
-    
-    // Create multiple oscillators for a thicker soundscape
-    const numOscs = 4;
-    const masterGain = this.audioContext.createGain();
-    masterGain.connect(this.audioContext.destination);
-    
-    const now = time;
-    masterGain.gain.setValueAtTime(0, now);
-    masterGain.gain.linearRampToValueAtTime(vol, now + attack);
-    masterGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-    // Add a subtle reverb effect using a convolver or just delay
-    const delay = this.audioContext.createDelay();
-    delay.delayTime.value = 0.33;
-    const feedback = this.audioContext.createGain();
-    feedback.gain.value = 0.4;
-    delay.connect(feedback);
-    feedback.connect(delay);
-    delay.connect(masterGain);
-
-    for (let i = 0; i < numOscs; i++) {
-      const osc = this.audioContext.createOscillator();
-      const filter = this.audioContext.createBiquadFilter();
-      
-      osc.type = i % 2 === 0 ? type : 'sine';
-      osc.frequency.value = freq * (1 + (i * 0.008)); // Slight detune
-      
-      filter.type = 'lowpass';
-      filter.frequency.value = freq * 2;
-      filter.frequency.linearRampToValueAtTime(freq * 6, now + attack);
-      filter.frequency.linearRampToValueAtTime(freq * 1.5, now + duration);
-      
-      osc.connect(filter);
-      filter.connect(masterGain);
-      filter.connect(delay); // Send to delay for space
-      
-      osc.start(now);
-      osc.stop(now + duration);
-    }
-  }
-
-  getTempoForVibe(vibe: string): number {
-    if (vibe.includes('tribal') || vibe.includes('rhythmic')) return 100;
-    if (vibe.includes('cyberpunk') || vibe.includes('electronic')) return 60;
-    return 40;
-  }
-
-  scheduleNext() {
-    if (!this.isPlaying) return;
-    
-    if (this.audioContext.state === 'suspended') {
-      this.audioContext.resume();
-    }
-    
-    while (this.nextNoteTime < this.audioContext.currentTime + 0.5) {
-      if (this.vibeBlend < 1.0) {
-        this.vibeBlend += 0.02; // crossfade over 50 notes for a much smoother transition
-        if (this.vibeBlend > 1.0) this.vibeBlend = 1.0;
-      }
-
-      if (this.vibeBlend < 1.0) {
-        // Equal power crossfade for smoother audio blending
-        const currentWeight = Math.cos(this.vibeBlend * 0.5 * Math.PI);
-        const targetWeight = Math.sin(this.vibeBlend * 0.5 * Math.PI);
-        this.generateTickForVibe(this.currentVibe, currentWeight, this.nextNoteTime);
-        this.generateTickForVibe(this.targetVibe, targetWeight, this.nextNoteTime);
-      } else {
-        this.generateTickForVibe(this.targetVibe, 1.0, this.nextNoteTime);
-      }
-      
-      // Smoothly interpolate tempo
-      const currentTempo = this.getTempoForVibe(this.currentVibe);
-      const targetTempo = this.getTempoForVibe(this.targetVibe);
-      const tempo = currentTempo * (1 - this.vibeBlend) + targetTempo * this.vibeBlend;
-      
-      const secondsPerBeat = 60.0 / tempo;
-      this.nextNoteTime += secondsPerBeat; // Quarter notes
-    }
-    
-    this.timerID = window.setTimeout(() => this.scheduleNext(), 50);
-  }
-
-  generateTickForVibe(vibe: string, weight: number, time: number) {
-    if (weight <= 0.01) return;
-    
-    const isCyberpunk = vibe.includes('cyberpunk') || vibe.includes('electronic');
-    const isTribal = vibe.includes('tribal') || vibe.includes('rhythmic') || vibe.includes('happy');
-    const isAcoustic = vibe.includes('acoustic') || vibe.includes('guitar');
-    const isAmbient = vibe.includes('ambient') || vibe.includes('drone');
-    const isSad = vibe.includes('sad') || vibe.includes('melancholy');
-    const isTense = vibe.includes('angry') || vibe.includes('fear') || vibe.includes('disgust');
-    
-    let scale = this.scales.pentatonic;
-    let baseNote = 48; // C3
-    let oscType: OscillatorType = 'sine';
-    let vol = 0.08;
-    let duration = 6.0; // Longer durations for soundscape
-    let attack = 3.0;
-
-    if (isCyberpunk) {
-      scale = this.scales.cyberpunk;
-      baseNote = 36; // C2
-      oscType = 'sawtooth';
-      vol = 0.04;
-      duration = 4.0;
-      attack = 2.0;
-    } else if (isTribal) {
-      scale = this.scales.tribal;
-      baseNote = 43; // G2
-      oscType = 'square';
-      vol = 0.06;
-      duration = 1.5;
-      attack = 0.1;
-    } else if (isSad) {
-      scale = this.scales.melancholic;
-      baseNote = 48;
-      oscType = 'sine';
-      vol = 0.08;
-      duration = 8.0;
-      attack = 4.0;
-    } else if (isTense) {
-      scale = this.scales.dissonant;
-      baseNote = 36;
-      oscType = 'sawtooth';
-      vol = 0.05;
-      duration = 5.0;
-      attack = 1.5;
-    } else if (isAcoustic) {
-      scale = this.scales.major;
-      baseNote = 48;
-      oscType = 'sine';
-      vol = 0.08;
-      duration = 5.0;
-      attack = 2.0;
-    } else if (isAmbient) {
-      scale = this.scales.drone;
-      baseNote = 36;
-      oscType = 'sine';
-      vol = 0.12;
-      duration = 10.0;
-      attack = 5.0;
-    }
-
-    vol *= weight; // Apply crossfade weight
-
-    // Randomly play a note from the scale
-    if (Math.random() > 0.2) {
-      const noteIndex = scale[Math.floor(Math.random() * scale.length)];
-      const freq = 440 * Math.pow(2, (baseNote + noteIndex - 69) / 12);
-      this.playNote(freq, oscType, duration, vol, attack, time);
-    }
-    
-    // Add a bass drone
-    if (Math.random() > 0.5) {
-      const bassFreq = 440 * Math.pow(2, (baseNote - 12 - 69) / 12);
-      this.playNote(bassFreq, 'sine', duration * 2, vol * 1.5, attack * 2, time);
-    }
-  }
-}
-
-const VIBE_MAP: Record<string, string> = {
-  person: "ethereal ambient drone, calm",
-  'cell phone': "cyberpunk synthwave, electronic",
-  laptop: "cyberpunk synthwave, electronic",
-  tv: "cyberpunk synthwave, electronic",
-  cup: "coffee shop jazz, chill acoustic",
-  bottle: "coffee shop jazz, chill acoustic",
-  bowl: "coffee shop jazz, chill acoustic",
-  cat: "playful acoustic guitar, happy melody",
-  dog: "playful acoustic guitar, happy melody",
-  bird: "playful acoustic guitar, happy melody",
-  car: "driving rock beat, fast tempo",
-  bus: "driving rock beat, fast tempo",
-  truck: "driving rock beat, fast tempo",
-  chair: "ambient drone, relaxing",
-  couch: "ambient drone, relaxing",
-  bed: "ambient drone, relaxing",
-  'potted plant': "ethereal flute, ambient nature",
-  book: "classical piano, focused",
-};
-
-function getVibeForObjects(objects: string[]) {
-  if (objects.length === 0) return "minimalist ambient drone, quiet";
-  
-  const vibes = new Set<string>();
-  for (const obj of objects) {
-    if (VIBE_MAP[obj]) {
-      vibes.add(VIBE_MAP[obj]);
-    } else {
-      vibes.add("chill lofi beat");
-    }
-  }
-  
-  return Array.from(vibes).slice(0, 2).join(", ");
-}
-
-const getVibeFromGemini = async (objects: string[], emotion: string, customMood?: string): Promise<string> => {
-  try {
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || process.env.API_KEY });
-    const prompt = `You are an expert sound designer and ambient music producer. 
-    Analyze the following scene and generate a highly evocative, 4-6 word description for an immersive ambient soundscape.
-    
-    Guidelines:
-    - Use sophisticated musical terminology (e.g., 'granular', 'reverberant', 'dissonant', 'ethereal', 'sub-bass').
-    - Focus on mood, texture, and atmosphere.
-    - NEVER use generic terms like 'pop', 'upbeat', 'happy', or 'energetic'.
-    - The soundscape must be purely ambient and experimental.
-    - Output ONLY the description, no other text.
-    
-    Scene Context:
-    - Emotional State: ${emotion}
-    - Visible Objects: ${objects.length > 0 ? objects.join(', ') : 'none'}
-    ${customMood ? `- User-Defined Mood: ${customMood}` : ''}
-    
-    Example Output: 'dark granular industrial drone texture' or 'ethereal shimmering crystalline ambient pads'`;
-    
-    const response = await ai.models.generateContent({
-      model: 'gemini-flash-lite-latest',
-      contents: prompt,
-    });
-    return response.text?.trim() || "ethereal atmospheric ambient drone";
-  } catch (e: any) {
-    console.warn("Gemini API error (falling back to local vibe map):", e.message || e);
-    return getVibeForObjects(objects) + `, ${emotion} atmospheric texture${customMood ? ` (${customMood})` : ''}`;
-  }
-};
-
 export default function App() {
   const [currentView, setCurrentView] = useState<'studio' | 'feed' | 'profile'>('studio');
   const [user, setUser] = useState<any>(null);
@@ -418,6 +71,15 @@ export default function App() {
     return () => unsubscribeAuth();
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('success') === 'true') {
+      setInfoMsg("Payment successful! You are now viewing the selected stream.");
+      setCurrentView('studio');
+      // Clean up URL so refresh doesn't trigger it again
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
   useEffect(() => {
     const q = query(collection(db, 'site_feed'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -444,18 +106,30 @@ export default function App() {
   const [transcription, setTranscription] = useState<string>('');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [customMood, setCustomMood] = useState<string>('');
-  const [isAiMusicEnabled, setIsAiMusicEnabled] = useState(true);
-  const [uploadedAudioUrl, setUploadedAudioUrl] = useState<string | null>(null);
+  const [playlist, setPlaylist] = useState<{ name: string, url: string, isAi?: boolean }[]>([]);
+  const [currentSongIndex, setCurrentSongIndex] = useState(0);
   const [bgMusicVolume, setBgMusicVolume] = useState(0.5);
+  const [continuousPlay, setContinuousPlay] = useState(true);
+  const [eqLevels, setEqLevels] = useState({ low: 0, mid: 0, high: 0 });
+  const [isGeneratingPlaylist, setIsGeneratingPlaylist] = useState(false);
+  const djEqRef = useRef<Tone.EQ3 | null>(null);
+  const generativeSynthRef = useRef<Tone.PolySynth | null>(null);
+  const generativePatternRef = useRef<Tone.Pattern<any> | null>(null);
+  const [intelFeed, setIntelFeed] = useState<any[]>([]);
+  const [isIntelLoading, setIsIntelLoading] = useState(false);
+  const [accessDenied, setAccessDenied] = useState(false);
+  const [estimatedAge, setEstimatedAge] = useState<number | null>(null);
+  const [isSnapshotModalOpen, setIsSnapshotModalOpen] = useState(false);
+  const [snapshotImage, setSnapshotImage] = useState<string | null>(null);
+  const [snapshotDescription, setSnapshotDescription] = useState("");
+  const [isSharingSnapshot, setIsSharingSnapshot] = useState(false);
+  const lastAgeCheckRef = useRef<number>(0);
+  const isFaceApiLoadedRef = useRef<boolean>(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const faceCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const sessionRef = useRef<any>(null);
-  const playerRef = useRef<PCMPlayer | null>(null);
-  const localSynthRef = useRef<Tone.PolySynth | null>(null);
-  const localPatternRef = useRef<Tone.Pattern<any> | null>(null);
   const recognitionRef = useRef<any>(null);
   const bgMusicRef = useRef<HTMLAudioElement>(null);
   
@@ -468,8 +142,17 @@ export default function App() {
   const vibeTimeoutRef = useRef<any>(null);
   const lastStateUpdateTimeRef = useRef<number>(0);
   const detectLoopRef = useRef<number | null>(null);
+  const isDetectingRef = useRef(false);
+  const lastDrawTimeRef = useRef(0);
   const smoothedBoxesRef = useRef<Map<string, SmoothedBox>>(new Map());
   const smoothedBlendshapesRef = useRef({ smile: 0, frown: 0, mouthOpen: 0, browRaise: 0, eyeBlink: 0, pucker: 0 });
+  const [detectionSensitivity, setDetectionSensitivity] = useState<'Low' | 'Medium' | 'High'>('Medium');
+
+  const SENSITIVITY_THRESHOLDS = {
+    Low: 0.2,
+    Medium: 0.5,
+    High: 0.8
+  };
 
   const playHoverSound = () => {
     try {
@@ -508,13 +191,18 @@ export default function App() {
       };
       
       recognitionRef.current.onerror = (event: any) => {
-        console.error('Speech recognition error', event.error);
+        if (event.error === 'network' || event.error === 'not-allowed') {
+          console.warn('Speech recognition access or network issue:', event.error);
+        } else {
+          console.error('Speech recognition error:', event.error);
+        }
+        
         if (event.error === 'not-allowed') {
           setIsTranscribing(false);
           setErrorMsg("Microphone access denied. Please enable microphone permissions in your browser settings.");
         } else if (event.error === 'network') {
           setIsTranscribing(false);
-          setErrorMsg("Speech recognition network error. This feature requires a stable internet connection and access to Google's speech services. If you are behind a firewall or VPN, it may be blocked.");
+          setErrorMsg("Speech recognition network error. This may happen if you are in a preview iframe, or behind a firewall/VPN that blocks access to Google's speech services.");
         } else {
           setErrorMsg(`Speech recognition error: ${event.error}`);
         }
@@ -572,6 +260,17 @@ export default function App() {
         setStatus('Loading Models...');
         await tf.ready().catch(e => console.warn("TF ready failed:", e));
         
+        // Try to load face-api models for age detection
+        try {
+          const modelPath = 'https://vladmandic.github.io/face-api/model/';
+          await faceapi.nets.tinyFaceDetector.loadFromUri(modelPath);
+          await faceapi.nets.ageGenderNet.loadFromUri(modelPath);
+          isFaceApiLoadedRef.current = true;
+          console.log("Loaded face-api models for age check");
+        } catch (e) {
+          console.warn("Failed to load faceapi age detection models:", e);
+        }
+
         // COCO-SSD load (Optional)
         try {
           const cocoModel = await cocoSsd.load();
@@ -650,77 +349,112 @@ export default function App() {
         canvas.height = video.videoHeight;
       }
 
+      // Age Check
+      const now = performance.now();
+      if (isFaceApiLoadedRef.current && (now - lastAgeCheckRef.current > 3000)) {
+        lastAgeCheckRef.current = now;
+        // Don't await in the main render loop to preserve framerate
+        (async () => {
+          try {
+            const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withAgeAndGender();
+            if (detections && detections.age) {
+              setEstimatedAge(Math.round(detections.age));
+              console.log(`Detected age: ${detections.age}`);
+              if (detections.age < 18) {
+                setAccessDenied(true);
+                stopSession();
+                return;
+              }
+            }
+          } catch (e) {
+            console.warn("Age detection error:", e);
+          }
+        })();
+      }
+
       try {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const detectedClasses = new Set<string>();
 
-        // --- Object Detection (Optional) ---
-        if (objectModelRef.current) {
-          const predictions = await objectModelRef.current.detect(video);
-          
-          const newSmoothedBoxes = new Map<string, SmoothedBox>();
-          const unassignedPredictions = [...predictions];
+        // Async ML inference - don't await in the main render loop to preserve framerate
+        if (!isDetectingRef.current) {
+          isDetectingRef.current = true;
+          (async () => {
+            try {
+              if (objectModelRef.current) {
+                const threshold = SENSITIVITY_THRESHOLDS[detectionSensitivity];
+                const predictions = await objectModelRef.current.detect(video, 10, threshold);
+                
+                const newSmoothedBoxes = new Map<string, SmoothedBox>();
+                const unassignedPredictions = [...predictions];
 
-          smoothedBoxesRef.current.forEach((box, id) => {
-            let closestIdx = -1;
-            let minDist = Infinity;
-            unassignedPredictions.forEach((pred, idx) => {
-              if (pred.class === box.class) {
-                const [px, py, pw, ph] = pred.bbox;
-                const dist = Math.hypot(px + pw/2 - (box.x + box.width/2), py + ph/2 - (box.y + box.height/2));
-                if (dist < 150) {
-                  if (dist < minDist) {
-                    minDist = dist;
-                    closestIdx = idx;
+                smoothedBoxesRef.current.forEach((box, id) => {
+                  let closestIdx = -1;
+                  let minDist = Infinity;
+                  unassignedPredictions.forEach((pred, idx) => {
+                    if (pred.class === box.class) {
+                      const [px, py, pw, ph] = pred.bbox;
+                      const dist = Math.hypot(px + pw/2 - (box.x + box.width/2), py + ph/2 - (box.y + box.height/2));
+                      if (dist < 150) {
+                        if (dist < minDist) {
+                          minDist = dist;
+                          closestIdx = idx;
+                        }
+                      }
+                    }
+                  });
+
+                  if (closestIdx !== -1) {
+                    const pred = unassignedPredictions[closestIdx];
+                    const [px, py, pw, ph] = pred.bbox;
+                    const lerp = 0.5; // Faster snap when updated
+                    box.x += (px - box.x) * lerp;
+                    box.y += (py - box.y) * lerp;
+                    box.width += (pw - box.width) * lerp;
+                    box.height += (ph - box.height) * lerp;
+                    box.opacity = Math.min(1, box.opacity + 0.1);
+                    box.score = pred.score;
+                    
+                    const targetLabelX = box.x + box.width + 20;
+                    const targetLabelY = box.y - 20;
+                    box.labelX += (targetLabelX - box.labelX) * lerp;
+                    box.labelY += (targetLabelY - box.labelY) * lerp;
+
+                    newSmoothedBoxes.set(id, box);
+                    unassignedPredictions.splice(closestIdx, 1);
+                  } else {
+                    newSmoothedBoxes.set(id, box); // keep it, let the render loop fade it
                   }
-                }
-              }
-            });
+                });
 
-            if (closestIdx !== -1) {
-              const pred = unassignedPredictions[closestIdx];
-              const [px, py, pw, ph] = pred.bbox;
-              const lerp = 0.15; // Smoothing factor
-              box.x += (px - box.x) * lerp;
-              box.y += (py - box.y) * lerp;
-              box.width += (pw - box.width) * lerp;
-              box.height += (ph - box.height) * lerp;
-              box.opacity = Math.min(1, box.opacity + 0.1);
-              box.score = pred.score;
-              
-              // Target label position (top right of box)
-              const targetLabelX = box.x + box.width + 20;
-              const targetLabelY = box.y - 20;
-              box.labelX += (targetLabelX - box.labelX) * lerp;
-              box.labelY += (targetLabelY - box.labelY) * lerp;
+                unassignedPredictions.forEach((pred) => {
+                  const id = Math.random().toString(36).substring(7);
+                  const [x, y, width, height] = pred.bbox;
+                  newSmoothedBoxes.set(id, {
+                    x, y, width, height, class: pred.class, score: pred.score, opacity: 0,
+                    labelX: x + width + 40, labelY: y - 40
+                  });
+                });
 
-              newSmoothedBoxes.set(id, box);
-              unassignedPredictions.splice(closestIdx, 1);
-              detectedClasses.add(box.class);
-            } else {
-              box.opacity -= 0.05; // Fade out
-              if (box.opacity > 0) {
-                newSmoothedBoxes.set(id, box);
-                detectedClasses.add(box.class);
+                smoothedBoxesRef.current = newSmoothedBoxes;
               }
+            } finally {
+              isDetectingRef.current = false;
             }
-          });
+          })();
+        }
 
-          unassignedPredictions.forEach((pred) => {
-            const id = Math.random().toString(36).substring(7);
-            const [x, y, width, height] = pred.bbox;
-            newSmoothedBoxes.set(id, {
-              x, y, width, height, class: pred.class, score: pred.score, opacity: 0,
-              labelX: x + width + 40, labelY: y - 40
-            });
-            detectedClasses.add(pred.class);
-          });
+        // --- Drawing Logic ---
+        smoothedBoxesRef.current.forEach((box, id) => {
+          // Fade out handling
+          box.opacity -= 0.02;
+          if (box.opacity <= 0) {
+            smoothedBoxesRef.current.delete(id);
+            return;
+          }
+          detectedClasses.add(box.class);
 
-          smoothedBoxesRef.current = newSmoothedBoxes;
-
-          // --- Drawing Logic ---
-          smoothedBoxesRef.current.forEach((box) => {
-            const { x, y, width, height, opacity, labelX, labelY } = box;
+          const { x, y, width, height, opacity, labelX, labelY } = box;
             const text = `${box.class} (${Math.round(box.score * 100)}%)`;
 
             ctx.strokeStyle = `rgba(255, 255, 255, ${opacity * 0.8})`;
@@ -772,7 +506,6 @@ export default function App() {
             ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
             ctx.fillText(text.toUpperCase(), labelX + 4, labelY + 11);
           });
-        }
 
         const classesArray = Array.from(detectedClasses).sort();
         
@@ -1026,17 +759,9 @@ export default function App() {
         smoothed.eyeBlink += (currentBlendshapes.eyeBlink - smoothed.eyeBlink) * smoothingFactor;
         smoothed.pucker += (currentBlendshapes.pucker - smoothed.pucker) * smoothingFactor;
 
-        // Pitch bend based on facial expressions
-        if (playerRef.current) {
-          let pitch = 1.0;
-          if (smoothed.browRaise > 0.1) {
-            pitch = 1.0 + smoothed.browRaise * 0.5; // Up to 1.5
-          } else if (smoothed.frown > 0.1) {
-            pitch = 1.0 - smoothed.frown * 0.5; // Down to 0.5
-          }
-          playerRef.current.setPitch(pitch);
-        }
-
+        // We just track expressions visually now.
+        // Also removed playerRef pitch bending here.
+        
         // Throttle React state updates for the console UI to ~10fps
         const now = performance.now();
         if (now - lastStateUpdateTimeRef.current > 100) {
@@ -1062,15 +787,11 @@ export default function App() {
             if (stateString !== lastStateRef.current) {
               lastStateRef.current = stateString;
               
-              const newVibe = await getVibeFromGemini(classesArray, currentEmotion, customMood);
+              const newVibe = `Visually tracking... ${currentEmotion} - ${classesArray.join(', ')}`;
               lastPromptRef.current = newVibe;
               setCurrentPrompt(newVibe);
               
-              if (sessionRef.current) {
-                sessionRef.current.setWeightedPrompts({
-                  weightedPrompts: [{ text: newVibe, weight: 1.0 }]
-                }).catch(console.error);
-              }
+              // Removed sessionRef.current logic
             }
           }, 3000);
         }
@@ -1104,7 +825,14 @@ export default function App() {
           streamRef.current = stream;
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
-            await videoRef.current.play().catch(e => console.error("Video play error:", e));
+            // Handle the play promise to avoid "interrupted by new load request" errors
+            try {
+              await videoRef.current.play();
+            } catch (e: any) {
+              if (e.name !== 'AbortError') {
+                console.error("Video play error:", e);
+              }
+            }
           }
           setIsCameraActive(true);
         } catch (camErr: any) {
@@ -1115,96 +843,18 @@ export default function App() {
         }
       }
 
-      // Start detection immediately so it runs even if Lyria fails
+      // Start detection immediately 
       if (!isPlayingRef.current) {
         isPlayingRef.current = true;
         detectLoopRef.current = requestAnimationFrame(runDetection);
       }
 
-      setStatus('Connecting to Lyria API...');
-      playerRef.current = new PCMPlayer(48000);
-      playerRef.current.setMuted(!isAiMusicEnabled);
-
-      let timeoutId: any;
-
-      let sessionPromise;
-      try {
-        const ai = new GoogleGenAI({ 
-          apiKey: process.env.API_KEY || process.env.GEMINI_API_KEY || 'dummy-key',
-          apiVersion: 'v1alpha'
-        });
-
-        sessionPromise = ai.live.music.connect({
-          model: "lyria-realtime-exp",
-          callbacks: {
-            onmessage: (message: any) => {
-              if (message.setupComplete) {
-                console.log("Lyria setup complete");
-              }
-              const audioChunk = message.audioChunk;
-              if (audioChunk?.data && playerRef.current) {
-                playerRef.current.playChunk(audioChunk.data);
-              }
-            },
-            onclose: () => {
-              clearTimeout(timeoutId);
-              if (isPlayingRef.current) {
-                setInfoMsg('Lyria connection closed.');
-                stopSession(false);
-              } else {
-                stopSession(false);
-              }
-            },
-            onerror: (err: any) => {
-              clearTimeout(timeoutId);
-              console.error("Lyria API Error:", err);
-              setErrorMsg(err.message || 'Connection error with Lyria API.');
-              setInfoMsg(null);
-              stopSession(false);
-            }
-          }
-        });
-      } catch (err: any) {
-        console.warn("Failed to initialize Lyria API:", err);
-        clearTimeout(timeoutId);
-        // Fallback to local synth
-        startLocalSynthFallback();
-        return;
-      }
+      setStatus('Connected & Playing');
+      setIsPlaying(true);
       
-      timeoutId = setTimeout(() => {
-        console.warn("Lyria API timeout");
-        setInfoMsg(null);
-        startLocalSynthFallback();
-      }, 10000); // Reduced timeout to 10s so fallback happens faster
-
-      sessionPromise.then(async session => {
-        clearTimeout(timeoutId);
-        sessionRef.current = session;
-        setStatus('Connected & Playing');
-        setIsPlaying(true);
-        
-        const initialPrompt = "minimalist ambient drone, quiet";
-        setCurrentPrompt(initialPrompt);
-        lastPromptRef.current = initialPrompt;
-        
-        try {
-          await session.setMusicGenerationConfig({
-            musicGenerationConfig: { bpm: 120, temperature: 1.0 }
-          });
-          await session.setWeightedPrompts({
-            weightedPrompts: [{ text: initialPrompt, weight: 1.0 }]
-          });
-          session.play();
-        } catch (e) {
-          console.error("Error setting up session:", e);
-        }
-      }).catch(err => {
-        clearTimeout(timeoutId);
-        console.error("API Error:", err);
-        // Fallback to local synth
-        startLocalSynthFallback();
-      });
+      const initialPrompt = "minimalist ambient drone, quiet";
+      setCurrentPrompt(initialPrompt);
+      lastPromptRef.current = initialPrompt;
 
     } catch (err: any) {
       console.error("Setup Error:", err);
@@ -1223,32 +873,7 @@ export default function App() {
     }
     pendingStateRef.current = null;
     
-    if (status === 'Connected & Playing' || status === 'Connecting to Lyria API...' || status.includes('Local Synth')) {
-      setStatus('Idle');
-    }
-    
-    if (playerRef.current) {
-      playerRef.current.stop();
-      playerRef.current = null;
-    }
-    if (sessionRef.current) {
-      try { sessionRef.current.conn.close(); } catch (e) {}
-      sessionRef.current = null;
-    }
-    
-    if (localPatternRef.current) {
-      localPatternRef.current.stop();
-      localPatternRef.current.dispose();
-      localPatternRef.current = null;
-    }
-    if (localSynthRef.current) {
-      localSynthRef.current.releaseAll();
-      localSynthRef.current.dispose();
-      localSynthRef.current = null;
-    }
-    if (Tone.Transport.state === 'started') {
-      Tone.Transport.stop();
-    }
+    setStatus('Idle');
     
     setConsoleState({
       emotion: 'neutral',
@@ -1280,8 +905,64 @@ export default function App() {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
         streamRef.current = null;
+        if (videoRef.current) {
+          videoRef.current.srcObject = null;
+          videoRef.current.load(); // Reset the video element
+        }
         setIsCameraActive(false);
       }
+    }
+  };
+
+  const handleTakeSnapshot = () => {
+    if (!isCameraActive) {
+      setErrorMsg("Camera must be active to take a snapshot.");
+      return;
+    }
+    
+    playHoverSound();
+    
+    if (canvasRef.current && videoRef.current) {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = 320;
+      tempCanvas.height = 180;
+      const ctx = tempCanvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0, 320, 180);
+        ctx.drawImage(canvasRef.current, 0, 0, 320, 180);
+        const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.6);
+        setSnapshotImage(dataUrl);
+        setSnapshotDescription(`Snapshot from Studio View: ${currentPrompt}`);
+        setIsSnapshotModalOpen(true);
+      }
+    }
+  };
+
+  const handleConfirmSnapshotShare = async () => {
+    if (!user || !snapshotImage) return;
+    
+    setIsSharingSnapshot(true);
+    try {
+      playHoverSound();
+      await addDoc(collection(db, 'site_feed'), {
+        userId: user.uid,
+        userName: user.displayName || 'Anonymous',
+        userPhoto: user.photoURL || '',
+        description: snapshotDescription || 'Snapshot from Studio View',
+        snapshot: snapshotImage,
+        isLive: false,
+        createdAt: serverTimestamp()
+      });
+      
+      setInfoMsg("Snapshot shared to feed!");
+      setIsSnapshotModalOpen(false);
+      setSnapshotImage(null);
+      setSnapshotDescription("");
+    } catch (e: any) {
+      console.error("Error sharing snapshot:", e);
+      setErrorMsg("Failed to share snapshot: " + e.message);
+    } finally {
+      setIsSharingSnapshot(false);
     }
   };
 
@@ -1329,129 +1010,172 @@ export default function App() {
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const url = URL.createObjectURL(file);
-      setUploadedAudioUrl(url);
-      setIsAiMusicEnabled(false);
-      if (playerRef.current) {
-        playerRef.current.setMuted(true);
+    const files = e.target.files;
+    if (files) {
+      const newPlaylist = Array.from(files).map(file => ({
+        name: (file as File).name,
+        url: URL.createObjectURL(file as File)
+      }));
+      setPlaylist(prev => [...prev, ...newPlaylist]);
+      
+      // Start playing if this is the first upload
+      if (playlist.length === 0) {
+        // Just autoplays according to the player loop below
       }
+    }
+  };
+
+  const removeFromPlaylist = (index: number) => {
+    setPlaylist(prev => {
+      const next = [...prev];
+      URL.revokeObjectURL(next[index].url);
+      next.splice(index, 1);
+      return next;
+    });
+    if (currentSongIndex >= index && currentSongIndex > 0) {
+      setCurrentSongIndex(prev => prev - 1);
+    }
+  };
+
+  const nextSong = () => {
+    if (playlist.length > 0) {
+      if (!continuousPlay && currentSongIndex === playlist.length - 1) return;
+      setCurrentSongIndex(prev => (prev + 1) % playlist.length);
+    }
+  };
+
+  const prevSong = () => {
+    if (playlist.length > 0) {
+      setCurrentSongIndex(prev => (prev - 1 + playlist.length) % playlist.length);
+    }
+  };
+
+  // DJ Mix and AI Generative Play Setup
+  useEffect(() => {
+    if (!djEqRef.current) {
+      djEqRef.current = new Tone.EQ3(0, 0, 0).toDestination();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (djEqRef.current) {
+      djEqRef.current.low.value = eqLevels.low;
+      djEqRef.current.mid.value = eqLevels.mid;
+      djEqRef.current.high.value = eqLevels.high;
+    }
+  }, [eqLevels]);
+
+  const playGenerativeTune = (seedName: string) => {
+    initAudio();
+    if (!generativeSynthRef.current) {
+      generativeSynthRef.current = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: "sine" },
+        envelope: { attack: 0.1, decay: 0.2, sustain: 0.5, release: 1 }
+      }).connect(djEqRef.current || Tone.getDestination());
+      generativeSynthRef.current.volume.value = -10;
+    }
+    if (generativePatternRef.current) {
+        generativePatternRef.current.stop();
+        generativePatternRef.current.dispose();
+    }
+    const hash = seedName.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    const scale = ["C4", "E4", "G4", "A4", "C5", "D5", "E5", "G5"];
+    const notes = [
+      scale[hash % scale.length],
+      scale[(hash * 2) % scale.length],
+      scale[(hash * 3) % scale.length],
+      scale[(hash * 5) % scale.length],
+    ];
+    generativePatternRef.current = new Tone.Pattern((time, note) => {
+      generativeSynthRef.current?.triggerAttackRelease(note, "8n", time);
+    }, notes, "upDown");
+    Tone.Transport.start();
+    generativePatternRef.current.start(0);
+  };
+
+  const stopGenerativeTune = () => {
+    if (generativePatternRef.current) {
+       generativePatternRef.current.stop();
+    }
+    Tone.Transport.pause();
+  };
+
+  useEffect(() => {
+    if (playlist.length > 0 && playlist[currentSongIndex]?.isAi) {
+       if (bgMusicRef.current) bgMusicRef.current.pause();
+       playGenerativeTune(playlist[currentSongIndex].name);
+       
+       // Move to next song automatically after 10 seconds for AI songs
+       const timeout = setTimeout(() => {
+         nextSong();
+       }, 10000);
+       return () => clearTimeout(timeout);
+    } else {
+       stopGenerativeTune();
+       if (bgMusicRef.current && continuousPlay) {
+          bgMusicRef.current.play().catch(()=>{});
+       }
+    }
+  }, [currentSongIndex, playlist, continuousPlay]);
+
+  const generateSuggestedPlaylist = async () => {
+    setIsGeneratingPlaylist(true);
+    try {
+      const { GoogleGenAI, Type } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || (process.env as any).API_KEY });
+      const currentNames = playlist.map(t => t.name).join(", ");
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `I have a playlist with these songs: ${currentNames || 'no songs yet'}. Suggest 5 unique generative AI song names that fit the vibe, maybe a bit more experimental. Make them sound like cool track titles, return as JSON array of strings.`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          }
+        }
+      });
+      const text = response.text;
+      if (text) {
+        const names = JSON.parse(text);
+        const newTracks = names.map((name: string) => ({ name, url: '', isAi: true }));
+        setPlaylist(prev => [...prev, ...newTracks]);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsGeneratingPlaylist(false);
     }
   };
 
   const updateAiPrompt = async (manualPrompt?: string) => {
-    const promptText = manualPrompt || await getVibeFromGemini(consoleState.objects, consoleState.emotion, customMood);
+    // Left empty or we can just fetch prompt text and only put it on console
+    // so we can still see current vibe, but we don't trigger anything.
+    // We can also just remove updateAiPrompt logic.
+    // The instructions say "take off back ground music generator", 
+    // maybe we can keep the "Audio Profile" visual text generation?
+    // Let's remove the audio-trigger parts.
+    const promptText = "Audio profile visually tracking... " + (manualPrompt || "user vibes");
     setCurrentPrompt(promptText);
-    if (sessionRef.current) {
-      sessionRef.current.setWeightedPrompts({
-        weightedPrompts: [{ text: promptText, weight: 1.0 }]
-      }).catch(console.error);
-    } else if (localSynthRef.current) {
-      // Update local synth based on emotion
-      updateLocalSynthVibe(consoleState.emotion);
-    }
   };
 
-  const updateLocalSynthVibe = (emotion: string) => {
-    if (!localPatternRef.current || !localSynthRef.current) return;
-    
-    // Change notes and tempo based on emotion
-    let notes = ["C4", "E4", "G4", "B4"];
-    let interval = "8n";
-    
-    switch (emotion) {
-      case 'happy':
-        notes = ["C4", "E4", "G4", "A4", "C5"];
-        interval = "16n";
-        Tone.Transport.bpm.rampTo(140, 1);
-        break;
-      case 'sadness':
-        notes = ["A3", "C4", "E4", "G4"];
-        interval = "4n";
-        Tone.Transport.bpm.rampTo(80, 2);
-        break;
-      case 'angry':
-        notes = ["C3", "C#3", "G3", "G#3"];
-        interval = "16n";
-        Tone.Transport.bpm.rampTo(160, 0.5);
-        break;
-      case 'fear':
-        notes = ["D4", "D#4", "A4", "A#4"];
-        interval = "16t";
-        Tone.Transport.bpm.rampTo(130, 1);
-        break;
-      case 'surprised':
-        notes = ["C4", "G4", "C5", "G5"];
-        interval = "8t";
-        Tone.Transport.bpm.rampTo(120, 0.5);
-        break;
-      default: // neutral
-        notes = ["C4", "D4", "E4", "G4", "A4"];
-        interval = "8n";
-        Tone.Transport.bpm.rampTo(100, 2);
-        break;
-    }
-    
-    localPatternRef.current.values = notes;
-    localPatternRef.current.interval = interval;
-  };
-
-  const startLocalSynthFallback = async () => {
-    try {
-      await initAudio();
-      
-      if (!localSynthRef.current) {
-        const reverb = new Tone.Reverb(4).toDestination();
-        const delay = new Tone.FeedbackDelay("8n", 0.5).connect(reverb);
-        const synth = new Tone.PolySynth(Tone.Synth, {
-          oscillator: { type: "sine" },
-          envelope: { attack: 0.1, decay: 0.2, sustain: 0.5, release: 1.5 }
-        }).connect(delay);
-        
-        synth.volume.value = -15;
-        localSynthRef.current = synth;
-        
-        const pattern = new Tone.Pattern((time, note) => {
-          if (isAiMusicEnabled) {
-            synth.triggerAttackRelease(note, "8n", time);
-          }
-        }, ["C4", "D4", "E4", "G4", "A4"], "randomWalk");
-        
-        localPatternRef.current = pattern;
-      }
-      
-      Tone.Transport.start();
-      localPatternRef.current.start(0);
-      
-      setStatus('Local Synth Active');
-      setIsPlaying(true);
-      setInfoMsg("Lyria API unavailable. Using local generative synth.");
-      
-      const initialPrompt = "minimalist ambient drone, quiet";
-      setCurrentPrompt(initialPrompt);
-      lastPromptRef.current = initialPrompt;
-      
-    } catch (e) {
-      console.error("Failed to start local synth:", e);
-      setErrorMsg("Failed to start audio engine.");
-      stopSession(false);
-    }
-  };
-
-  const toggleAiMusic = () => {
-    const newState = !isAiMusicEnabled;
-    setIsAiMusicEnabled(newState);
-    if (playerRef.current) {
-      playerRef.current.setMuted(!newState);
-    }
-    if (localSynthRef.current) {
-      localSynthRef.current.volume.rampTo(newState ? -15 : -Infinity, 0.5);
-    }
-  };
 
   return (
     <div className="h-[100dvh] w-full bg-black text-white flex flex-col overflow-hidden font-mono relative">
+      {accessDenied ? (
+        <div className="absolute inset-0 z-50 bg-red-900/90 backdrop-blur flex flex-col items-center justify-center p-6 text-center">
+          <AlertCircle className="w-16 h-16 text-red-500 mb-4" />
+          <h1 className="text-3xl font-bold text-white tracking-widest uppercase mb-2">Access Denied</h1>
+          <p className="text-red-200 mb-6 max-w-md">
+            Based on facial biometrics, we estimate your age to be {estimatedAge}. You must be 18 or older to access this application.
+          </p>
+          <div className="text-xs text-red-400 font-mono opacity-50 uppercase tracking-widest">
+            SYSTEM.LOCKOUT_ACTIVE
+          </div>
+        </div>
+      ) : null}
+
       {/* Header */}
       <header className="relative z-30 w-full p-4 border-b border-white/10 bg-black/80 backdrop-blur flex justify-between items-center shrink-0">
         <div className="font-bold text-xl tracking-tighter text-orange-500 drop-shadow-[0_0_8px_rgba(249,115,22,0.8)]">MYTUBE</div>
@@ -1537,10 +1261,36 @@ export default function App() {
                       )}
                       {item.isLive && (
                         <button 
-                          onClick={() => setCurrentView('studio')}
+                          onClick={async () => {
+                            if (!user) {
+                              setErrorMsg("Please sign in from the profile tab to view premium streams.");
+                              return;
+                            }
+                            if (user.uid === item.userId) {
+                              setCurrentView('studio'); 
+                              return;
+                            }
+                            try {
+                              const response = await fetch('/api/create-checkout-session', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ streamId: item.id })
+                              });
+                              const data = await response.json();
+                              if (data.url) {
+                                window.location.href = data.url;
+                              } else {
+                                throw new Error(data.error || "Failed to create checkout session");
+                              }
+                            } catch(err: any) {
+                              setErrorMsg("Payment error: " + err.message);
+                            }
+                          }}
                           className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity"
                         >
-                          <div className="px-4 py-2 bg-white text-black text-[10px] font-bold uppercase tracking-widest">Join Stream</div>
+                          <div className="px-4 py-2 bg-orange-500 text-black text-[10px] font-bold uppercase tracking-widest flex items-center gap-2">
+                            <span>Join Premium Stream ($5.00)</span>
+                          </div>
                         </button>
                       )}
                     </div>
@@ -1610,22 +1360,6 @@ export default function App() {
                       <Mic className="w-5 h-5" />
                     </button>
                     <button 
-                      onClick={handleShare}
-                      onMouseEnter={playHoverSound}
-                      className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors backdrop-blur-md border border-white/20 shrink-0"
-                      title="Share to Feed"
-                    >
-                      <Share2 className="w-5 h-5 text-white" />
-                    </button>
-                    <button 
-                      onClick={() => { playHoverSound(); setIsControlsOpen(true); }}
-                      onMouseEnter={playHoverSound}
-                      className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors backdrop-blur-md border border-white/20 shrink-0"
-                      title="Settings & Controls"
-                    >
-                      <Settings className="w-5 h-5 text-white" />
-                    </button>
-                    <button 
                       onClick={() => { playHoverSound(); setIsInfoOpen(true); }}
                       onMouseEnter={playHoverSound}
                       className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-colors backdrop-blur-md border border-white/20 shrink-0"
@@ -1649,6 +1383,45 @@ export default function App() {
                     className={`w-2 h-2 rounded-none ${status === 'Connected & Playing' ? 'bg-white shadow-[0_0_8px_rgba(255,255,255,0.8)]' : status.includes('Connecting') || status.includes('Starting') ? 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.8)]' : status === 'Loading Object Detection Model...' ? 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.8)]' : status.includes('Error') || status.includes('Denied') ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]' : 'bg-zinc-600'}`} 
                   />
                   {status}
+                </div>
+
+                {/* Main Action Buttons */}
+                <div className="flex flex-col gap-2 mt-2">
+                  <button 
+                    onClick={handleShare}
+                    onMouseEnter={playHoverSound}
+                    className="flex items-center gap-2 p-3 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 backdrop-blur-md transition-colors w-full text-left"
+                  >
+                    <Share2 className="w-5 h-5 text-red-400" />
+                    <div>
+                      <div className="text-xs font-bold text-white uppercase tracking-widest">Share Live Stream</div>
+                      <div className="text-[10px] text-white/50 uppercase tracking-widest">Post current view to feed</div>
+                    </div>
+                  </button>
+
+                  <button 
+                    onClick={handleTakeSnapshot}
+                    onMouseEnter={playHoverSound}
+                    className="flex items-center gap-2 p-3 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/50 backdrop-blur-md transition-colors w-full text-left"
+                  >
+                    <Camera className="w-5 h-5 text-orange-400" />
+                    <div>
+                      <div className="text-xs font-bold text-white uppercase tracking-widest">Share Snapshot</div>
+                      <div className="text-[10px] text-white/50 uppercase tracking-widest">Post photo to feed</div>
+                    </div>
+                  </button>
+
+                  <button 
+                    onClick={() => { playHoverSound(); setIsControlsOpen(true); }}
+                    onMouseEnter={playHoverSound}
+                    className="flex items-center gap-2 p-3 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 backdrop-blur-md transition-colors w-full text-left"
+                  >
+                    <Activity className="w-5 h-5 text-blue-400" />
+                    <div>
+                      <div className="text-xs font-bold text-white uppercase tracking-widest">Messaging</div>
+                      <div className="text-[10px] text-white/50 uppercase tracking-widest">Open Team Communication</div>
+                    </div>
+                  </button>
                 </div>
               </div>
 
@@ -1674,70 +1447,69 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Mobile Camera Viewport Spacer */}
-              <div className="h-[45vh] landscape:h-[100vh] lg:hidden pointer-events-none shrink-0" />
-            </div>
-
-            {/* Bottom Left: Scan & Affective */}
-            <div className="flex flex-col landscape:flex-row lg:landscape:flex-col gap-4 shrink-0 lg:mt-auto order-4 lg:order-none pointer-events-auto">
-              
-              {/* Middle Left: Face Scanner */}
-              <div className="flex flex-col justify-center shrink-0 landscape:flex-1 lg:landscape:flex-none">
-                <div className="bg-black/40 backdrop-blur-md border border-white/20 p-4 w-full shadow-[0_0_30px_rgba(0,0,0,0.8)] relative overflow-hidden flex flex-col h-64 landscape:h-full lg:landscape:h-64 shrink-0" title="Real-time facial landmark tracking">
-                  <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-2 shrink-0 flex items-center gap-2">
-                    <ScanFace className="w-3 h-3" />
-                    Biometric Scan
-                  </h3>
-                  <div className="relative w-full flex-1 border border-white/10 flex items-center justify-center bg-white/5 min-h-0">
-                    <canvas
-                      ref={faceCanvasRef}
-                      width={300}
-                      height={300}
-                      className={`w-full h-full object-contain transition-opacity duration-500 ${isCameraActive ? 'opacity-100' : 'opacity-0'}`}
-                    />
+              {/* Scan & Affective moved up */}
+              <div className="flex flex-col landscape:flex-row lg:landscape:flex-col gap-4 shrink-0 pointer-events-auto">
+                {/* Middle Left: Face Scanner */}
+                <div className="flex flex-col justify-center shrink-0 landscape:flex-1 lg:landscape:flex-none">
+                  <div className="bg-black/40 backdrop-blur-md border border-white/20 p-4 w-full shadow-[0_0_30px_rgba(0,0,0,0.8)] relative overflow-hidden flex flex-col h-64 landscape:h-full lg:landscape:h-64 shrink-0" title="Real-time facial landmark tracking">
+                    <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-2 shrink-0 flex justify-between items-center gap-2">
+                      <span className="flex items-center gap-2"><ScanFace className="w-3 h-3" /> Biometric Scan</span>
+                      <span className="text-orange-400">AGE: {estimatedAge !== null ? estimatedAge : '--'}</span>
+                    </h3>
+                    <div className="relative w-full flex-1 border border-white/10 flex items-center justify-center bg-white/5 min-h-0">
+                      <canvas
+                        ref={faceCanvasRef}
+                        width={300}
+                        height={300}
+                        className={`w-full h-full object-contain transition-opacity duration-500 ${isCameraActive ? 'opacity-100' : 'opacity-0'}`}
+                      />
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Bottom Left: Affective State */}
-              <div className="flex flex-col justify-end shrink-0 landscape:flex-1 lg:landscape:flex-none">
-                <div className="bg-black/40 backdrop-blur-md border border-white/20 p-5 w-full h-full shadow-[0_0_30px_rgba(0,0,0,0.8)]" title="Detected emotional state based on facial expressions">
-                  <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
-                    <Activity className="w-3 h-3" />
-                    Affective State
-                  </h3>
-                  <div className="text-3xl font-light tracking-tighter mb-4 capitalize text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]">
-                    {consoleState.emotion}
-                  </div>
-                  
-                  <div className="space-y-2">
-                    {[
-                      { label: 'Smile', value: consoleState.blendshapes.smile },
-                      { label: 'Frown', value: consoleState.blendshapes.frown },
-                      { label: 'Mouth Open', value: consoleState.blendshapes.mouthOpen },
-                      { label: 'Brow Raise', value: consoleState.blendshapes.browRaise },
-                      { label: 'Eye Blink', value: consoleState.blendshapes.eyeBlink },
-                    ].map((item) => (
-                      <div key={item.label}>
-                        <div className="flex justify-between text-[10px] mb-1">
-                          <span className="text-white/60 uppercase tracking-wider">{item.label}</span>
-                          <span className="font-bold text-white/90">{isNaN(item.value) ? 0 : (item.value * 100).toFixed(0)}%</span>
+                {/* Bottom Left: Affective State */}
+                <div className="flex flex-col justify-end shrink-0 landscape:flex-1 lg:landscape:flex-none">
+                  <div className="bg-black/40 backdrop-blur-md border border-white/20 p-5 w-full h-full shadow-[0_0_30px_rgba(0,0,0,0.8)]" title="Detected emotional state based on facial expressions">
+                    <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
+                      <Activity className="w-3 h-3" />
+                      Affective State
+                    </h3>
+                    <div className="text-3xl font-light tracking-tighter mb-4 capitalize text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]">
+                      {consoleState.emotion}
+                    </div>
+                    
+                    <div className="space-y-2">
+                      {[
+                        { label: 'Smile', value: consoleState.blendshapes.smile },
+                        { label: 'Frown', value: consoleState.blendshapes.frown },
+                        { label: 'Mouth Open', value: consoleState.blendshapes.mouthOpen },
+                        { label: 'Brow Raise', value: consoleState.blendshapes.browRaise },
+                        { label: 'Eye Blink', value: consoleState.blendshapes.eyeBlink },
+                      ].map((item) => (
+                        <div key={item.label}>
+                          <div className="flex justify-between text-[10px] mb-1">
+                            <span className="text-white/60 uppercase tracking-wider">{item.label}</span>
+                            <span className="font-bold text-white/90">{isNaN(item.value) ? 0 : (item.value * 100).toFixed(0)}%</span>
+                          </div>
+                          <div className="h-[2px] bg-white/10 overflow-hidden">
+                            <motion.div 
+                              className="h-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]"
+                              initial={{ width: 0 }}
+                              animate={{ width: `${isNaN(item.value) ? 0 : item.value * 100}%` }}
+                              transition={{ type: 'spring', bounce: 0, duration: 0.5 }}
+                            />
+                          </div>
                         </div>
-                        <div className="h-[2px] bg-white/10 overflow-hidden">
-                          <motion.div 
-                            className="h-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)]"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${isNaN(item.value) ? 0 : item.value * 100}%` }}
-                            transition={{ type: 'spring', bounce: 0, duration: 0.5 }}
-                          />
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
 
             </div>
+
+            {/* Mobile Camera Viewport Spacer */}
+            <div className="h-[45vh] landscape:h-[100vh] lg:hidden pointer-events-none shrink-0" />
           </div>
 
           {/* Right Column */}
@@ -1824,24 +1596,29 @@ export default function App() {
                 </h3>
                 
                 <div className="space-y-4">
-                  {/* AI Music Toggle */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-white/60 uppercase tracking-wider">AI Music</span>
-                    <button 
-                      onClick={toggleAiMusic}
-                      className={`px-3 py-1 text-[10px] font-bold uppercase tracking-widest border transition-all ${
-                        isAiMusicEnabled 
-                          ? 'bg-orange-500/20 text-orange-400 border-orange-500' 
-                          : 'bg-white/5 text-white/40 border-white/10'
-                      }`}
-                    >
-                      {isAiMusicEnabled ? 'Active' : 'Stopped'}
-                    </button>
+                  {/* Detection Sensitivity */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] text-white/60 uppercase tracking-wider block">Detection Sensitivity</label>
+                    <div className="flex gap-1 p-1 bg-black/40 border border-white/10">
+                      {(['Low', 'Medium', 'High'] as const).map((level) => (
+                        <button
+                          key={level}
+                          onClick={() => setDetectionSensitivity(level)}
+                          className={`flex-1 py-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${
+                            detectionSensitivity === level 
+                              ? 'bg-orange-500 text-black' 
+                              : 'text-white/40 hover:bg-white/5'
+                          }`}
+                        >
+                          {level}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
-                  {/* Custom Mood Input */}
                   <div className="space-y-2">
                     <label className="text-[10px] text-white/60 uppercase tracking-wider block">Custom Mood</label>
+
                     <div className="flex gap-2">
                       <input 
                         type="text" 
@@ -1861,11 +1638,12 @@ export default function App() {
 
                   {/* Background Music Upload */}
                   <div className="space-y-2">
-                    <label className="text-[10px] text-white/60 uppercase tracking-wider block">Background Music</label>
+                    <label className="text-[10px] text-white/60 uppercase tracking-wider block">Playlist Upload</label>
                     <div className="flex flex-col gap-2">
                       <input 
                         type="file" 
                         accept="audio/*"
+                        multiple
                         onChange={handleFileUpload}
                         className="hidden"
                         id="bg-music-upload"
@@ -1875,36 +1653,136 @@ export default function App() {
                         className="w-full py-2 border border-dashed border-white/20 hover:border-white/40 bg-white/5 text-[10px] text-white/60 uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer transition-colors"
                       >
                         <Upload className="w-3 h-3" />
-                        {uploadedAudioUrl ? 'Change Track' : 'Upload Track'}
+                        Add to Playlist
                       </label>
                       
-                      {uploadedAudioUrl && (
-                        <div className="space-y-2">
+                      {playlist.length > 0 && (
+                        <div className="space-y-3 bg-black/20 p-3 border border-white/5">
                           <audio 
                             ref={bgMusicRef}
-                            src={uploadedAudioUrl} 
-                            loop 
-                            autoPlay 
+                            src={playlist[currentSongIndex]?.url} 
+                            onEnded={nextSong}
+                            autoPlay
                             className="hidden"
                           />
-                          <div className="flex items-center justify-between">
-                            <span className="text-[8px] text-orange-400 uppercase truncate max-w-[120px]">Track Loaded</span>
-                            <div className="flex items-center gap-2">
-                              <Volume2 className="w-3 h-3 text-white/40" />
-                              <input 
-                                type="range" 
-                                min="0" 
-                                max="1" 
-                                step="0.01" 
-                                value={bgMusicVolume}
-                                onChange={(e) => {
-                                  const vol = parseFloat(e.target.value);
-                                  setBgMusicVolume(vol);
-                                  if (bgMusicRef.current) bgMusicRef.current.volume = vol;
-                                }}
-                                className="w-16 h-1 bg-white/10 appearance-none cursor-pointer accent-orange-500"
-                              />
+                          
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                             <div className="flex-1 min-w-0">
+                               <div className="text-[8px] text-white/40 uppercase tracking-tighter">Audio System</div>
+                               <div className="text-[10px] text-white font-bold truncate">Studio Playlist</div>
+                             </div>
+                             <div className="flex items-center gap-2">
+                               <button 
+                                 onClick={generateSuggestedPlaylist}
+                                 disabled={isGeneratingPlaylist}
+                                 className="cursor-pointer p-1 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 flex items-center gap-1 text-[8px] uppercase font-bold tracking-tighter disabled:opacity-50"
+                               >
+                                 {isGeneratingPlaylist ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
+                                 AI Mix
+                               </button>
+                               <label className="cursor-pointer p-1 hover:bg-white/10 text-white/70 border border-white/20 flex items-center gap-1 text-[8px] uppercase font-bold tracking-tighter">
+                                 <Upload className="w-2.5 h-2.5" />
+                                 Upload
+                                 <input 
+                                   type="file" 
+                                   accept="audio/*" 
+                                   multiple 
+                                   className="hidden" 
+                                   onChange={handleFileUpload} 
+                                 />
+                               </label>
+                             </div>
+                          </div>
+
+                          {/* DJ Table Controls */}
+                          <div className="bg-black/40 p-2 border border-white/10 space-y-2 mt-2 mb-2">
+                            <div className="flex items-center justify-between text-[8px] uppercase tracking-widest text-white/50 mb-1">
+                              <span>3-Band EQ</span>
+                              <label className="flex items-center gap-1 cursor-pointer">
+                                <input 
+                                  type="checkbox" 
+                                  checked={continuousPlay} 
+                                  onChange={(e) => setContinuousPlay(e.target.checked)}
+                                  className="accent-orange-500"
+                                />
+                                <span className={continuousPlay ? "text-orange-400" : ""}>Continuous</span>
+                              </label>
                             </div>
+                            <div className="flex gap-4">
+                              {[
+                                { label: 'LOW', key: 'low', min: -20, max: 20 },
+                                { label: 'MID', key: 'mid', min: -20, max: 20 },
+                                { label: 'HIGH', key: 'high', min: -20, max: 20 }
+                              ].map(({ label, key, min, max }) => (
+                                <div key={key} className="flex-1 flex flex-col items-center gap-1">
+                                  <input 
+                                    type="range" 
+                                    min={min} 
+                                    max={max}
+                                    value={eqLevels[key as keyof typeof eqLevels]}
+                                    onChange={(e) => setEqLevels(prev => ({ ...prev, [key]: parseFloat(e.target.value)}))}
+                                    className="w-full h-1 bg-white/10 appearance-none cursor-pointer accent-orange-500"
+                                    title={`${label} EQ`}
+                                  />
+                                  <span className="text-[7px] font-mono text-white/40">{label}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[8px] text-white/40 uppercase tracking-tighter">Now Playing</div>
+                              <div className="text-[10px] text-orange-400 font-bold truncate">
+                                {playlist[currentSongIndex]?.name}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button onClick={prevSong} className="p-1 hover:bg-white/10 text-white/60"><SkipBack className="w-3 h-3" /></button>
+                              <button 
+                                onClick={() => {
+                                  if (bgMusicRef.current) {
+                                    if (bgMusicRef.current.paused) bgMusicRef.current.play();
+                                    else bgMusicRef.current.pause();
+                                  }
+                                }} 
+                                className="p-1 hover:bg-white/10 text-white"
+                              >
+                                <Play className="w-3 h-3" />
+                              </button>
+                              <button onClick={nextSong} className="p-1 hover:bg-white/10 text-white/60"><SkipForward className="w-3 h-3" /></button>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Volume2 className="w-3 h-3 text-white/40" />
+                            <input 
+                              type="range" 
+                              min="0" 
+                              max="1" 
+                              step="0.01" 
+                              value={bgMusicVolume}
+                              onChange={(e) => {
+                                const vol = parseFloat(e.target.value);
+                                setBgMusicVolume(vol);
+                                if (bgMusicRef.current) bgMusicRef.current.volume = vol;
+                              }}
+                              className="flex-1 h-1 bg-white/10 appearance-none cursor-pointer accent-orange-500"
+                            />
+                          </div>
+
+                          <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+                            {playlist.map((track, idx) => (
+                              <div key={idx} className={`flex items-center justify-between p-1.5 text-[9px] ${idx === currentSongIndex ? 'bg-orange-500/10 text-orange-400' : 'text-white/40 hover:bg-white/5'}`}>
+                                <button onClick={() => setCurrentSongIndex(idx)} className="flex-1 text-left truncate mr-2 flex items-center gap-1">
+                                  <span>{idx + 1}. {track.name}</span>
+                                  {track.isAi && <span className="px-1 py-0.5 bg-orange-500/20 text-[6px] tracking-widest text-orange-400 border border-orange-500/50 uppercase">AI Syn</span>}
+                                </button>
+                                <button onClick={() => removeFromPlaylist(idx)} className="hover:text-red-400">
+                                  <X className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}
@@ -1930,9 +1808,9 @@ export default function App() {
                 </div>
               </div>
 
-              {/* News Feed */}
+              {/* Intel Hub */}
               <div className="order-4 w-full">
-                <NewsCard />
+                <IntelFeed />
               </div>
 
             </div>
@@ -2055,6 +1933,84 @@ export default function App() {
       </AnimatePresence>
       {/* Controls Modal */}
       <AnimatePresence>
+        {isSnapshotModalOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md pointer-events-auto"
+            onClick={() => setIsSnapshotModalOpen(false)}
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-zinc-900 border border-orange-500/30 p-6 max-w-2xl w-full shadow-[0_0_50px_rgba(249,115,22,0.2)] relative"
+            >
+              <div className="flex items-center justify-between mb-6 border-b border-white/10 pb-4">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Camera className="w-5 h-5 text-orange-500" />
+                  Share Snapshot
+                </h2>
+                <button 
+                  onClick={() => setIsSnapshotModalOpen(false)}
+                  className="p-2 border border-white/10 bg-black/50 hover:bg-white/10 text-white/50 hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-6">
+                <div className="flex-1">
+                  <div className="relative aspect-video bg-black border border-white/10 overflow-hidden">
+                    {snapshotImage && (
+                      <img src={snapshotImage} alt="Snapshot Preview" className="w-full h-full object-cover" />
+                    )}
+                    <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 text-[8px] text-white/50 font-mono uppercase tracking-widest border border-white/20">
+                      Studio_Preview.raw
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 flex flex-col gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] text-white/50 uppercase tracking-widest font-bold">
+                      Add Description
+                    </label>
+                    <textarea 
+                      value={snapshotDescription}
+                      onChange={(e) => setSnapshotDescription(e.target.value)}
+                      placeholder="What's happening in the studio?"
+                      className="w-full h-32 bg-black/50 border border-white/10 p-3 text-sm text-white focus:border-orange-500/50 outline-none resize-none font-sans"
+                    />
+                  </div>
+
+                  <div className="mt-auto pt-4 flex gap-3">
+                    <button 
+                      onClick={() => setIsSnapshotModalOpen(false)}
+                      className="flex-1 py-3 border border-white/10 text-white/50 text-xs font-bold uppercase tracking-widest hover:bg-white/5 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      onClick={handleConfirmSnapshotShare}
+                      disabled={isSharingSnapshot}
+                      className="flex-1 py-3 bg-orange-500 text-black text-xs font-bold uppercase tracking-widest hover:bg-orange-400 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isSharingSnapshot ? (
+                        <><Loader2 className="w-3 h-3 animate-spin" /> Sharing...</>
+                      ) : (
+                        <><Share2 className="w-3 h-3" /> Post to Feed</>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
         {isControlsOpen && (
           <motion.div 
             initial={{ opacity: 0 }}
@@ -2119,13 +2075,6 @@ export default function App() {
                       setIsMuted(!isMuted);
                       if (Tone.getDestination()) {
                         Tone.getDestination().mute = !isMuted;
-                      }
-                      if (playerRef.current) {
-                        if (!isMuted) {
-                          playerRef.current.audioContext.suspend();
-                        } else {
-                          playerRef.current.audioContext.resume();
-                        }
                       }
                     }}
                     className={`px-4 py-2 font-mono text-xs font-bold uppercase tracking-widest transition-colors ${
