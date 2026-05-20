@@ -56,6 +56,49 @@ async function startServer() {
     }
   });
 
+  // API Route for Gemini Chat
+  app.post('/api/chat', async (req, res) => {
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('GEMINI_API_KEY environment variable is required');
+      }
+      
+      // Dynamic import to match usage
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey });
+      
+      const { prompt, history } = req.body;
+      
+      // For simplicity in a prototype we use pure generateContent with simple history merging
+      // or we can use the chats feature
+      const chat = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: {
+          systemInstruction: "You are a helpful coding assistant and bestie bot. You chat with the streamer and answer their questions, giving coding tutorials while they are live. Keep your answers reasonably concise so they fit in a chat window.",
+        }
+      });
+      
+      // Pre-seed history if passed (optional, for simple integration we just rely on passing full log or starting fresh. But wait, ai.chats doesn't let you append history easily after create, except by sending messages. We can just send the latest prompt). Let's just use generateContent for stateless or send the prompt to the chat.
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [
+          { role: 'user', parts: [{ text: "System prompt: You are a helpful coding assistant and bestie bot. You chat with the streamer and answer their questions, giving coding tutorials while they are live. Be friendly." }] },
+          ...(history || []).map((msg: any) => ({
+            role: msg.role === 'user' ? 'user' : 'model',
+            parts: [{ text: msg.content }]
+          })),
+          { role: 'user', parts: [{ text: prompt }] }
+        ],
+      });
+
+      res.json({ text: response.text });
+    } catch (e: any) {
+      console.error('Chat error:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
-import { Camera, Square, Play, Music, Loader2, AlertCircle, Key, Activity, Cpu, ScanFace, Info, X, Mic, Settings, Video, VideoOff, Volume2, VolumeX, Users, Share2, RefreshCw, Upload, SkipBack, SkipForward } from 'lucide-react';
+import { Camera, Square, Play, Music, Loader2, AlertCircle, Key, Activity, Cpu, ScanFace, Info, X, Mic, Settings, Video, VideoOff, Volume2, VolumeX, Users, Share2, RefreshCw, Upload, SkipBack, SkipForward, MessageSquare, Send } from 'lucide-react';
 import * as faceapi from '@vladmandic/face-api';
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
@@ -13,6 +13,7 @@ import { doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp } 
 import { AvatarEditor } from './AvatarEditor';
 import { NewsCard } from './components/NewsCard';
 import { IntelFeed } from './components/IntelFeed';
+import Markdown from 'react-markdown';
 
 let hoverSynth: Tone.Synth | null = null;
 
@@ -106,6 +107,15 @@ export default function App() {
   const [transcription, setTranscription] = useState<string>('');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [customMood, setCustomMood] = useState<string>('');
+  
+  // AI Chat Bot State
+  const [chatMessages, setChatMessages] = useState<{role: 'user'|'ai', content: string}[]>([
+    { role: 'ai', content: "Hi bestie! Ready to code some apps together while you're live? 💖" }
+  ]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  
   const [playlist, setPlaylist] = useState<{ name: string, url: string, isAi?: boolean }[]>([]);
   const [currentSongIndex, setCurrentSongIndex] = useState(0);
   const [bgMusicVolume, setBgMusicVolume] = useState(0.5);
@@ -810,6 +820,8 @@ export default function App() {
     
     try {
       setErrorMsg(null);
+      // Ensure audio context is started on user interaction
+      await Tone.start();
       setStatus('Starting camera...');
       
       let stream = streamRef.current;
@@ -911,6 +923,47 @@ export default function App() {
         }
         setIsCameraActive(false);
       }
+    }
+  };
+
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatMessages]);
+
+  const handleChatSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!chatInput.trim() || isChatLoading) return;
+
+    const userMessage = chatInput.trim();
+    setChatInput("");
+    const newMessages = [...chatMessages, { role: 'user' as const, content: userMessage }];
+    setChatMessages(newMessages);
+    setIsChatLoading(true);
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: userMessage,
+          history: chatMessages.map(msg => ({ role: msg.role, content: msg.content }))
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to get response from AI');
+      }
+
+      const data = await response.json();
+      setChatMessages(prev => [...prev, { role: 'ai', content: data.text }]);
+    } catch (err: any) {
+      console.error("Chat error:", err);
+      // Fallback for demo if backend fails or needs real key
+      setChatMessages(prev => [...prev, { role: 'ai', content: "Oops, my circuits glitched! Make sure GEMINI_API_KEY is set in the server." }]);
+    } finally {
+      setIsChatLoading(false);
     }
   };
 
@@ -1329,7 +1382,7 @@ export default function App() {
                 <div className="flex items-start justify-between w-full">
                   <div>
                     <h1 className="text-2xl font-bold tracking-tighter text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]">MYTUBE</h1>
-                    <p className="text-[10px] text-white/70 font-mono uppercase tracking-widest">Lyria RealTime Engine v2.4</p>
+                    <p className="text-[10px] text-white/70 font-mono uppercase tracking-widest">Lyria RealTime Engine v3.0</p>
                   </div>
                   <div className="flex items-center gap-2">
                     {/* Small Start/Stop Button (Mobile Landscape Only) */}
@@ -1386,41 +1439,32 @@ export default function App() {
                 </div>
 
                 {/* Main Action Buttons */}
-                <div className="flex flex-col gap-2 mt-2">
+                <div className="flex gap-2 mt-2">
                   <button 
                     onClick={handleShare}
                     onMouseEnter={playHoverSound}
-                    className="flex items-center gap-2 p-3 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 backdrop-blur-md transition-colors w-full text-left"
+                    className="flex-1 flex flex-col items-center justify-center gap-1.5 p-2 bg-red-500/20 hover:bg-red-500/30 border border-red-500/50 backdrop-blur-md transition-colors text-center"
                   >
-                    <Share2 className="w-5 h-5 text-red-400" />
-                    <div>
-                      <div className="text-xs font-bold text-white uppercase tracking-widest">Share Live Stream</div>
-                      <div className="text-[10px] text-white/50 uppercase tracking-widest">Post current view to feed</div>
-                    </div>
+                    <Share2 className="w-4 h-4 text-red-400" />
+                    <div className="text-[9px] font-bold text-white uppercase tracking-widest w-full truncate">Share</div>
                   </button>
 
                   <button 
                     onClick={handleTakeSnapshot}
                     onMouseEnter={playHoverSound}
-                    className="flex items-center gap-2 p-3 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/50 backdrop-blur-md transition-colors w-full text-left"
+                    className="flex-1 flex flex-col items-center justify-center gap-1.5 p-2 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/50 backdrop-blur-md transition-colors text-center"
                   >
-                    <Camera className="w-5 h-5 text-orange-400" />
-                    <div>
-                      <div className="text-xs font-bold text-white uppercase tracking-widest">Share Snapshot</div>
-                      <div className="text-[10px] text-white/50 uppercase tracking-widest">Post photo to feed</div>
-                    </div>
+                    <Camera className="w-4 h-4 text-orange-400" />
+                    <div className="text-[9px] font-bold text-white uppercase tracking-widest w-full truncate">Snap</div>
                   </button>
 
                   <button 
                     onClick={() => { playHoverSound(); setIsControlsOpen(true); }}
                     onMouseEnter={playHoverSound}
-                    className="flex items-center gap-2 p-3 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 backdrop-blur-md transition-colors w-full text-left"
+                    className="flex-1 flex flex-col items-center justify-center gap-1.5 p-2 bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/50 backdrop-blur-md transition-colors text-center"
                   >
-                    <Activity className="w-5 h-5 text-blue-400" />
-                    <div>
-                      <div className="text-xs font-bold text-white uppercase tracking-widest">Messaging</div>
-                      <div className="text-[10px] text-white/50 uppercase tracking-widest">Open Team Communication</div>
-                    </div>
+                    <Activity className="w-4 h-4 text-blue-400" />
+                    <div className="text-[9px] font-bold text-white uppercase tracking-widest w-full truncate">Chat</div>
                   </button>
                 </div>
               </div>
@@ -1448,11 +1492,11 @@ export default function App() {
               </div>
 
               {/* Scan & Affective moved up */}
-              <div className="flex flex-col landscape:flex-row lg:landscape:flex-col gap-4 shrink-0 pointer-events-auto">
+              <div className="flex flex-col landscape:flex-row lg:landscape:flex-col gap-2 shrink-0 pointer-events-auto">
                 {/* Middle Left: Face Scanner */}
                 <div className="flex flex-col justify-center shrink-0 landscape:flex-1 lg:landscape:flex-none">
-                  <div className="bg-black/40 backdrop-blur-md border border-white/20 p-4 w-full shadow-[0_0_30px_rgba(0,0,0,0.8)] relative overflow-hidden flex flex-col h-64 landscape:h-full lg:landscape:h-64 shrink-0" title="Real-time facial landmark tracking">
-                    <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-2 shrink-0 flex justify-between items-center gap-2">
+                  <div className="bg-black/40 backdrop-blur-md border border-white/20 p-3 w-full shadow-[0_0_30px_rgba(0,0,0,0.8)] relative overflow-hidden flex flex-col h-48 landscape:h-full lg:landscape:h-40 shrink-0" title="Real-time facial landmark tracking">
+                    <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-1 shrink-0 flex justify-between items-center gap-2">
                       <span className="flex items-center gap-2"><ScanFace className="w-3 h-3" /> Biometric Scan</span>
                       <span className="text-orange-400">AGE: {estimatedAge !== null ? estimatedAge : '--'}</span>
                     </h3>
@@ -1469,16 +1513,16 @@ export default function App() {
 
                 {/* Bottom Left: Affective State */}
                 <div className="flex flex-col justify-end shrink-0 landscape:flex-1 lg:landscape:flex-none">
-                  <div className="bg-black/40 backdrop-blur-md border border-white/20 p-5 w-full h-full shadow-[0_0_30px_rgba(0,0,0,0.8)]" title="Detected emotional state based on facial expressions">
-                    <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
+                  <div className="bg-black/40 backdrop-blur-md border border-white/20 p-3 w-full shadow-[0_0_30px_rgba(0,0,0,0.8)]" title="Detected emotional state based on facial expressions">
+                    <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-2 flex items-center gap-2">
                       <Activity className="w-3 h-3" />
                       Affective State
                     </h3>
-                    <div className="text-3xl font-light tracking-tighter mb-4 capitalize text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]">
+                    <div className="text-xl font-light tracking-tighter mb-2 capitalize text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]">
                       {consoleState.emotion}
                     </div>
                     
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       {[
                         { label: 'Smile', value: consoleState.blendshapes.smile },
                         { label: 'Frown', value: consoleState.blendshapes.frown },
@@ -1487,7 +1531,7 @@ export default function App() {
                         { label: 'Eye Blink', value: consoleState.blendshapes.eyeBlink },
                       ].map((item) => (
                         <div key={item.label}>
-                          <div className="flex justify-between text-[10px] mb-1">
+                          <div className="flex justify-between text-[8px] mb-0.5">
                             <span className="text-white/60 uppercase tracking-wider">{item.label}</span>
                             <span className="font-bold text-white/90">{isNaN(item.value) ? 0 : (item.value * 100).toFixed(0)}%</span>
                           </div>
@@ -1588,208 +1632,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Audio Controls */}
-              <div className="order-3 w-full bg-black/40 backdrop-blur-md border border-white/20 p-5 shadow-[0_0_30px_rgba(0,0,0,0.8)]">
-                <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <Music className="w-3 h-3" />
-                  Audio Controls
-                </h3>
-                
-                <div className="space-y-4">
-                  {/* Detection Sensitivity */}
-                  <div className="space-y-2">
-                    <label className="text-[10px] text-white/60 uppercase tracking-wider block">Detection Sensitivity</label>
-                    <div className="flex gap-1 p-1 bg-black/40 border border-white/10">
-                      {(['Low', 'Medium', 'High'] as const).map((level) => (
-                        <button
-                          key={level}
-                          onClick={() => setDetectionSensitivity(level)}
-                          className={`flex-1 py-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${
-                            detectionSensitivity === level 
-                              ? 'bg-orange-500 text-black' 
-                              : 'text-white/40 hover:bg-white/5'
-                          }`}
-                        >
-                          {level}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
 
-                  <div className="space-y-2">
-                    <label className="text-[10px] text-white/60 uppercase tracking-wider block">Custom Mood</label>
-
-                    <div className="flex gap-2">
-                      <input 
-                        type="text" 
-                        value={customMood}
-                        onChange={(e) => setCustomMood(e.target.value)}
-                        placeholder="e.g. Cyberpunk Noir"
-                        className="flex-1 bg-white/5 border border-white/10 px-2 py-1 text-[10px] text-white focus:outline-none focus:border-orange-500/50"
-                      />
-                      <button 
-                        onClick={() => updateAiPrompt()}
-                        className="px-2 py-1 bg-white/10 hover:bg-white/20 border border-white/20 text-[10px] uppercase tracking-widest"
-                      >
-                        Set
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Background Music Upload */}
-                  <div className="space-y-2">
-                    <label className="text-[10px] text-white/60 uppercase tracking-wider block">Playlist Upload</label>
-                    <div className="flex flex-col gap-2">
-                      <input 
-                        type="file" 
-                        accept="audio/*"
-                        multiple
-                        onChange={handleFileUpload}
-                        className="hidden"
-                        id="bg-music-upload"
-                      />
-                      <label 
-                        htmlFor="bg-music-upload"
-                        className="w-full py-2 border border-dashed border-white/20 hover:border-white/40 bg-white/5 text-[10px] text-white/60 uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer transition-colors"
-                      >
-                        <Upload className="w-3 h-3" />
-                        Add to Playlist
-                      </label>
-                      
-                      {playlist.length > 0 && (
-                        <div className="space-y-3 bg-black/20 p-3 border border-white/5">
-                          <audio 
-                            ref={bgMusicRef}
-                            src={playlist[currentSongIndex]?.url} 
-                            onEnded={nextSong}
-                            autoPlay
-                            className="hidden"
-                          />
-                          
-                          <div className="flex items-center justify-between gap-2 mb-2">
-                             <div className="flex-1 min-w-0">
-                               <div className="text-[8px] text-white/40 uppercase tracking-tighter">Audio System</div>
-                               <div className="text-[10px] text-white font-bold truncate">Studio Playlist</div>
-                             </div>
-                             <div className="flex items-center gap-2">
-                               <button 
-                                 onClick={generateSuggestedPlaylist}
-                                 disabled={isGeneratingPlaylist}
-                                 className="cursor-pointer p-1 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 flex items-center gap-1 text-[8px] uppercase font-bold tracking-tighter disabled:opacity-50"
-                               >
-                                 {isGeneratingPlaylist ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
-                                 AI Mix
-                               </button>
-                               <label className="cursor-pointer p-1 hover:bg-white/10 text-white/70 border border-white/20 flex items-center gap-1 text-[8px] uppercase font-bold tracking-tighter">
-                                 <Upload className="w-2.5 h-2.5" />
-                                 Upload
-                                 <input 
-                                   type="file" 
-                                   accept="audio/*" 
-                                   multiple 
-                                   className="hidden" 
-                                   onChange={handleFileUpload} 
-                                 />
-                               </label>
-                             </div>
-                          </div>
-
-                          {/* DJ Table Controls */}
-                          <div className="bg-black/40 p-2 border border-white/10 space-y-2 mt-2 mb-2">
-                            <div className="flex items-center justify-between text-[8px] uppercase tracking-widest text-white/50 mb-1">
-                              <span>3-Band EQ</span>
-                              <label className="flex items-center gap-1 cursor-pointer">
-                                <input 
-                                  type="checkbox" 
-                                  checked={continuousPlay} 
-                                  onChange={(e) => setContinuousPlay(e.target.checked)}
-                                  className="accent-orange-500"
-                                />
-                                <span className={continuousPlay ? "text-orange-400" : ""}>Continuous</span>
-                              </label>
-                            </div>
-                            <div className="flex gap-4">
-                              {[
-                                { label: 'LOW', key: 'low', min: -20, max: 20 },
-                                { label: 'MID', key: 'mid', min: -20, max: 20 },
-                                { label: 'HIGH', key: 'high', min: -20, max: 20 }
-                              ].map(({ label, key, min, max }) => (
-                                <div key={key} className="flex-1 flex flex-col items-center gap-1">
-                                  <input 
-                                    type="range" 
-                                    min={min} 
-                                    max={max}
-                                    value={eqLevels[key as keyof typeof eqLevels]}
-                                    onChange={(e) => setEqLevels(prev => ({ ...prev, [key]: parseFloat(e.target.value)}))}
-                                    className="w-full h-1 bg-white/10 appearance-none cursor-pointer accent-orange-500"
-                                    title={`${label} EQ`}
-                                  />
-                                  <span className="text-[7px] font-mono text-white/40">{label}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="text-[8px] text-white/40 uppercase tracking-tighter">Now Playing</div>
-                              <div className="text-[10px] text-orange-400 font-bold truncate">
-                                {playlist[currentSongIndex]?.name}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button onClick={prevSong} className="p-1 hover:bg-white/10 text-white/60"><SkipBack className="w-3 h-3" /></button>
-                              <button 
-                                onClick={() => {
-                                  if (bgMusicRef.current) {
-                                    if (bgMusicRef.current.paused) bgMusicRef.current.play();
-                                    else bgMusicRef.current.pause();
-                                  }
-                                }} 
-                                className="p-1 hover:bg-white/10 text-white"
-                              >
-                                <Play className="w-3 h-3" />
-                              </button>
-                              <button onClick={nextSong} className="p-1 hover:bg-white/10 text-white/60"><SkipForward className="w-3 h-3" /></button>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <Volume2 className="w-3 h-3 text-white/40" />
-                            <input 
-                              type="range" 
-                              min="0" 
-                              max="1" 
-                              step="0.01" 
-                              value={bgMusicVolume}
-                              onChange={(e) => {
-                                const vol = parseFloat(e.target.value);
-                                setBgMusicVolume(vol);
-                                if (bgMusicRef.current) bgMusicRef.current.volume = vol;
-                              }}
-                              className="flex-1 h-1 bg-white/10 appearance-none cursor-pointer accent-orange-500"
-                            />
-                          </div>
-
-                          <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
-                            {playlist.map((track, idx) => (
-                              <div key={idx} className={`flex items-center justify-between p-1.5 text-[9px] ${idx === currentSongIndex ? 'bg-orange-500/10 text-orange-400' : 'text-white/40 hover:bg-white/5'}`}>
-                                <button onClick={() => setCurrentSongIndex(idx)} className="flex-1 text-left truncate mr-2 flex items-center gap-1">
-                                  <span>{idx + 1}. {track.name}</span>
-                                  {track.isAi && <span className="px-1 py-0.5 bg-orange-500/20 text-[6px] tracking-widest text-orange-400 border border-orange-500/50 uppercase">AI Syn</span>}
-                                </button>
-                                <button onClick={() => removeFromPlaylist(idx)} className="hover:text-red-400">
-                                  <X className="w-2.5 h-2.5" />
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
 
               {/* Transcription */}
               <div className="order-3 w-full bg-black/40 backdrop-blur-md border border-white/20 p-5 shadow-[0_0_30px_rgba(0,0,0,0.8)]" title="Live Audio Transcription">
@@ -1811,6 +1654,55 @@ export default function App() {
               {/* Intel Hub */}
               <div className="order-4 w-full">
                 <IntelFeed />
+              </div>
+
+              {/* AI Chat Bot */}
+              <div className="order-5 w-full bg-black/40 backdrop-blur-md border border-white/20 p-5 shadow-[0_0_30px_rgba(0,0,0,0.8)] flex flex-col h-[300px]" title="AI Bestie Bot">
+                <div className="flex items-center justify-between mb-3 shrink-0">
+                  <h3 className="text-[10px] font-bold text-white/50 uppercase tracking-widest flex items-center gap-2">
+                    <MessageSquare className="w-3 h-3" />
+                    Bestie Bot
+                  </h3>
+                  <div className="flex items-center gap-1 text-[8px] text-white/30 uppercase">
+                    {isChatLoading ? <Loader2 className="w-3 h-3 animate-spin text-orange-500" /> : <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]" />}
+                    {isChatLoading ? 'Thinking' : 'Online'}
+                  </div>
+                </div>
+                
+                <div 
+                  ref={chatScrollRef}
+                  className="flex-1 overflow-y-auto space-y-3 mb-3 pr-2 custom-scrollbar"
+                >
+                  {chatMessages.map((msg, idx) => (
+                    <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                      <div className={`text-[10px] uppercase font-bold tracking-widest mb-1 ${msg.role === 'user' ? 'text-white/40' : 'text-orange-400'}`}>
+                        {msg.role === 'user' ? 'You' : 'Bestie Bot'}
+                      </div>
+                      <div className={`p-2 w-full text-xs overflow-hidden leading-relaxed ${msg.role === 'user' ? 'bg-white/10 text-white border border-white/10' : 'bg-orange-500/10 text-orange-100 border border-orange-500/30'}`}>
+                        <div className="font-mono [&>p]:mb-2 [&>pre]:bg-black/50 [&>pre]:p-2 [&>pre]:overflow-x-auto [&>code]:bg-black/50 [&>code]:px-1 [&>ul]:list-disc [&>ul]:ml-4">
+                           <Markdown>{msg.content}</Markdown>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <form onSubmit={handleChatSubmit} className="flex items-center gap-2 shrink-0 pointer-events-auto">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Ask for tutortials, code..."
+                    className="flex-1 bg-white/5 border border-white/20 px-3 py-2 text-xs text-white focus:outline-none focus:border-orange-500/50"
+                  />
+                  <button 
+                    type="submit"
+                    disabled={isChatLoading || !chatInput.trim()}
+                    className="p-2 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/50 text-orange-400 disabled:opacity-50 transition-colors"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </form>
               </div>
 
             </div>
@@ -2029,7 +1921,7 @@ export default function App() {
               <div className="flex flex-col-reverse sm:flex-row sm:items-start justify-between gap-4 mb-6">
                 <h2 className="text-xl font-bold text-white flex items-center gap-2 self-start">
                   <Settings className="w-5 h-5 shrink-0" />
-                  System Controls
+                  System & Audio Controls
                 </h2>
                 <button 
                   onClick={() => setIsControlsOpen(false)}
@@ -2105,8 +1997,214 @@ export default function App() {
                 </div>
 
                 {/* Team Communication */}
-                <div className="mt-8">
+                <div className="mt-8 border-t border-white/10 pt-4">
+                  <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <Activity className="w-4 h-4" />
+                    Team Messaging
+                  </h3>
                   <TeamCommunication />
+                </div>
+
+                <div className="mt-8 border-t border-white/10 pt-4">
+                  <h3 className="text-xs font-bold text-white/50 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <Music className="w-4 h-4" />
+                    Advanced Audio System
+                  </h3>
+
+                  <div className="space-y-4">
+                    {/* Detection Sensitivity */}
+                    <div className="space-y-2">
+                      <label className="text-[10px] text-white/60 uppercase tracking-wider block">Detection Sensitivity</label>
+                      <div className="flex gap-1 p-1 bg-black/40 border border-white/10">
+                        {(['Low', 'Medium', 'High'] as const).map((level) => (
+                          <button
+                            key={level}
+                            onClick={() => setDetectionSensitivity(level)}
+                            className={`flex-1 py-1.5 text-[9px] font-bold uppercase tracking-widest transition-all ${
+                              detectionSensitivity === level 
+                                ? 'bg-orange-500 text-black' 
+                                : 'text-white/40 hover:bg-white/5'
+                            }`}
+                          >
+                            {level}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] text-white/60 uppercase tracking-wider block">Custom Mood</label>
+
+                      <div className="flex gap-2">
+                        <input 
+                          type="text" 
+                          value={customMood}
+                          onChange={(e) => setCustomMood(e.target.value)}
+                          placeholder="e.g. Cyberpunk Noir"
+                          className="flex-1 bg-white/5 border border-white/10 px-2 py-1 text-[10px] text-white focus:outline-none focus:border-orange-500/50"
+                        />
+                        <button 
+                          onClick={() => updateAiPrompt()}
+                          className="px-2 py-1 bg-white/10 hover:bg-white/20 border border-white/20 text-[10px] uppercase tracking-widest"
+                        >
+                          Set
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Background Music Upload */}
+                    <div className="space-y-2">
+                      <label className="text-[10px] text-white/60 uppercase tracking-wider block">Playlist Upload</label>
+                      <div className="flex flex-col gap-2">
+                        <input 
+                          type="file" 
+                          accept="audio/*"
+                          multiple
+                          onChange={handleFileUpload}
+                          className="hidden"
+                          id="bg-music-upload-modal"
+                        />
+                        <label 
+                          htmlFor="bg-music-upload-modal"
+                          className="w-full py-2 border border-dashed border-white/20 hover:border-white/40 bg-white/5 text-[10px] text-white/60 uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer transition-colors"
+                        >
+                          <Upload className="w-3 h-3" />
+                          Add to Playlist
+                        </label>
+                        
+                        {playlist.length > 0 && (
+                          <div className="space-y-3 bg-black/20 p-3 border border-white/5">
+                            <audio 
+                              ref={bgMusicRef}
+                              src={playlist[currentSongIndex]?.url} 
+                              onEnded={nextSong}
+                              autoPlay
+                              className="hidden"
+                            />
+                            
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                               <div className="flex-1 min-w-0">
+                                 <div className="text-[8px] text-white/40 uppercase tracking-tighter">Audio System</div>
+                                 <div className="text-[10px] text-white font-bold truncate">Studio Playlist</div>
+                               </div>
+                               <div className="flex items-center gap-2">
+                                 <button 
+                                   onClick={generateSuggestedPlaylist}
+                                   disabled={isGeneratingPlaylist}
+                                   className="cursor-pointer p-1 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 flex items-center gap-1 text-[8px] uppercase font-bold tracking-tighter disabled:opacity-50"
+                                 >
+                                   {isGeneratingPlaylist ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <RefreshCw className="w-2.5 h-2.5" />}
+                                   AI Mix
+                                 </button>
+                                 <label className="cursor-pointer p-1 hover:bg-white/10 text-white/70 border border-white/20 flex items-center gap-1 text-[8px] uppercase font-bold tracking-tighter">
+                                   <Upload className="w-2.5 h-2.5" />
+                                   Upload
+                                   <input 
+                                     type="file" 
+                                     accept="audio/*" 
+                                     multiple 
+                                     className="hidden" 
+                                     onChange={handleFileUpload} 
+                                   />
+                                 </label>
+                               </div>
+                            </div>
+
+                            {/* DJ Table Controls */}
+                            <div className="bg-black/40 p-2 border border-white/10 space-y-2 mt-2 mb-2">
+                              <div className="flex items-center justify-between text-[8px] uppercase tracking-widest text-white/50 mb-1">
+                                <span>3-Band EQ</span>
+                                <label className="flex items-center gap-1 cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={continuousPlay} 
+                                    onChange={(e) => setContinuousPlay(e.target.checked)}
+                                    className="accent-orange-500"
+                                  />
+                                  <span className={continuousPlay ? "text-orange-400" : ""}>Continuous</span>
+                                </label>
+                              </div>
+                              <div className="flex gap-4">
+                                {[
+                                  { label: 'LOW', key: 'low', min: -20, max: 20 },
+                                  { label: 'MID', key: 'mid', min: -20, max: 20 },
+                                  { label: 'HIGH', key: 'high', min: -20, max: 20 }
+                                ].map(({ label, key, min, max }) => (
+                                  <div key={key} className="flex-1 flex flex-col items-center gap-1">
+                                    <input 
+                                      type="range" 
+                                      min={min} 
+                                      max={max}
+                                      value={eqLevels[key as keyof typeof eqLevels]}
+                                      onChange={(e) => setEqLevels(prev => ({ ...prev, [key]: parseFloat(e.target.value)}))}
+                                      className="w-full h-1 bg-white/10 appearance-none cursor-pointer accent-orange-500"
+                                      title={`${label} EQ`}
+                                    />
+                                    <span className="text-[7px] font-mono text-white/40">{label}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className="text-[8px] text-white/40 uppercase tracking-tighter">Now Playing</div>
+                                <div className="text-[10px] text-orange-400 font-bold truncate">
+                                  {playlist[currentSongIndex]?.name}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button onClick={prevSong} className="p-1 hover:bg-white/10 text-white/60"><SkipBack className="w-3 h-3" /></button>
+                                <button 
+                                  onClick={() => {
+                                    if (bgMusicRef.current) {
+                                      if (bgMusicRef.current.paused) bgMusicRef.current.play();
+                                      else bgMusicRef.current.pause();
+                                    }
+                                  }} 
+                                  className="p-1 hover:bg-white/10 text-white"
+                                >
+                                  <Play className="w-3 h-3" />
+                                </button>
+                                <button onClick={nextSong} className="p-1 hover:bg-white/10 text-white/60"><SkipForward className="w-3 h-3" /></button>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <Volume2 className="w-3 h-3 text-white/40" />
+                              <input 
+                                type="range" 
+                                min="0" 
+                                max="1" 
+                                step="0.01" 
+                                value={bgMusicVolume}
+                                onChange={(e) => {
+                                  const vol = parseFloat(e.target.value);
+                                  setBgMusicVolume(vol);
+                                  if (bgMusicRef.current) bgMusicRef.current.volume = vol;
+                                }}
+                                className="flex-1 h-1 bg-white/10 appearance-none cursor-pointer accent-orange-500"
+                              />
+                            </div>
+
+                            <div className="max-h-24 overflow-y-auto space-y-1 pr-1">
+                              {playlist.map((track, idx) => (
+                                <div key={idx} className={`flex items-center justify-between p-1.5 text-[9px] ${idx === currentSongIndex ? 'bg-orange-500/10 text-orange-400' : 'text-white/40 hover:bg-white/5'}`}>
+                                  <button onClick={() => setCurrentSongIndex(idx)} className="flex-1 text-left truncate mr-2 flex items-center gap-1">
+                                    <span>{idx + 1}. {track.name}</span>
+                                    {track.isAi && <span className="px-1 py-0.5 bg-orange-500/20 text-[6px] tracking-widest text-orange-400 border border-orange-500/50 uppercase">AI Syn</span>}
+                                  </button>
+                                  <button onClick={() => removeFromPlaylist(idx)} className="hover:text-red-400">
+                                    <X className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
               </div>
@@ -2117,7 +2215,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="relative z-30 w-full p-4 border-t border-white/10 bg-black/80 backdrop-blur text-center text-[10px] text-white/50 uppercase tracking-widest shrink-0">
-        &copy; 2026 MyTube. All rights reserved. | Powered by Lyria RealTime Engine
+        &copy; 2026 MyTube. All rights reserved. | Powered by Lyria RealTime Engine v3.0
       </footer>
     </div>
   );
